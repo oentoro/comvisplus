@@ -28,44 +28,62 @@ MIN_TRACK_FRAMES = 3           # frame minimum sebelum track dihitung valid
 
 
 class CountingLine:
-    """Garis virtual untuk mendeteksi crossing."""
+    """Garis hitung virtual — mendukung vertikal, horizontal, dan diagonal.
+    Posisi disimpan sebagai dua titik ternormalisasi (0.0–1.0)."""
 
-    def __init__(self, position: float, direction: str, frame_w: int, frame_h: int):
-        self.direction = direction
+    def __init__(self, x1: float, y1: float, x2: float, y2: float,
+                 frame_w: int, frame_h: int):
         self.frame_w = frame_w
         self.frame_h = frame_h
+        self.x1n, self.y1n = x1, y1
+        self.x2n, self.y2n = x2, y2
 
-        if direction == "vertical":
-            self.x = int(frame_w * position)
-        else:
-            self.y = int(frame_h * position)
+    @property
+    def p1(self) -> tuple[int, int]:
+        return (int(self.x1n * self.frame_w), int(self.y1n * self.frame_h))
+
+    @property
+    def p2(self) -> tuple[int, int]:
+        return (int(self.x2n * self.frame_w), int(self.y2n * self.frame_h))
 
     def draw(self, frame: np.ndarray, state: str = "normal") -> None:
-        # normal=kuning, hover=oranye, drag=putih+tebal
-        color_map = {
-            "normal": (0, 255, 255),
-            "hover":  (0, 165, 255),
-            "drag":   (255, 255, 255),
-        }
+        color_map = {"normal": (0, 255, 255), "hover": (0, 165, 255), "drag": (255, 255, 255)}
         color = color_map.get(state, color_map["normal"])
-        thickness = 4 if state == "drag" else 2
-        if self.direction == "vertical":
-            cv2.line(frame, (self.x, 0), (self.x, self.frame_h), color, thickness)
-        else:
-            cv2.line(frame, (0, self.y), (self.frame_w, self.y), color, thickness)
-
-    def near(self, x: int, y: int, tol: int = 15) -> bool:
-        """True jika kursor dalam jarak tol piksel dari garis."""
-        if self.direction == "vertical":
-            return abs(x - self.x) <= tol
-        return abs(y - self.y) <= tol
+        thickness = 3 if state == "drag" else 2
+        cv2.line(frame, self.p1, self.p2, color, thickness)
+        # Endpoint handles agar user tahu bisa di-drag
+        r = 7 if state != "normal" else 5
+        cv2.circle(frame, self.p1, r, color, -1)
+        cv2.circle(frame, self.p2, r, color, -1)
 
     def side(self, cx: int, cy: int) -> int:
-        """Kembalikan sisi objek relatif terhadap garis (-1 atau +1)."""
-        if self.direction == "vertical":
-            return 1 if cx >= self.x else -1
-        else:
-            return 1 if cy >= self.y else -1
+        """Sisi titik terhadap garis via cross product."""
+        x1, y1 = self.p1
+        x2, y2 = self.p2
+        val = (x2 - x1) * (cy - y1) - (y2 - y1) * (cx - x1)
+        return 1 if val >= 0 else -1
+
+    def near(self, x: int, y: int, tol: int = 12) -> bool:
+        return self._dist_to_segment(x, y) <= tol
+
+    def near_endpoint(self, x: int, y: int, tol: int = 14) -> int:
+        """Kembalikan 1 jika dekat P1, 2 jika dekat P2, 0 jika tidak."""
+        x1, y1 = self.p1
+        x2, y2 = self.p2
+        if (x - x1) ** 2 + (y - y1) ** 2 <= tol ** 2:
+            return 1
+        if (x - x2) ** 2 + (y - y2) ** 2 <= tol ** 2:
+            return 2
+        return 0
+
+    def _dist_to_segment(self, px: int, py: int) -> float:
+        x1, y1 = self.p1
+        x2, y2 = self.p2
+        dx, dy = x2 - x1, y2 - y1
+        if dx == 0 and dy == 0:
+            return ((px - x1) ** 2 + (py - y1) ** 2) ** 0.5
+        t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)))
+        return ((px - x1 - t * dx) ** 2 + (py - y1 - t * dy) ** 2) ** 0.5
 
 
 class PeopleCounter:
@@ -73,8 +91,8 @@ class PeopleCounter:
         self,
         source: str,
         model_path: str = DEFAULT_MODEL,
-        line_pos: float = DEFAULT_LINE_POS,
-        line_dir: str = DEFAULT_LINE_DIR,
+        line_p1: tuple[float, float] = (0.5, 0.0),
+        line_p2: tuple[float, float] = (0.5, 1.0),
         output: str | None = None,
         show: bool = True,
         save_log: bool = True,
@@ -84,8 +102,8 @@ class PeopleCounter:
     ):
         self.source = source
         self.model = YOLO(model_path)
-        self.line_pos = line_pos
-        self.line_dir = line_dir
+        self.line_p1 = line_p1
+        self.line_p2 = line_p2
         self.output_path = output
         self.show = show
         self.save_log = save_log
@@ -106,8 +124,12 @@ class PeopleCounter:
         self.log_rows: list[dict] = []
         self.start_time = datetime.now()
 
-        # State mouse drag
-        self._dragging = False
+        # State drag (desktop)
+        self._dragging = False          # drag seluruh garis
+        self._drag_endpoint = 0         # 1=P1, 2=P2, 0=tidak ada
+        self._drag_start = (0, 0)       # posisi mouse saat mulai drag
+        self._drag_p1_start = (0.0, 0.0)
+        self._drag_p2_start = (0.0, 0.0)
         self._hover = False
 
         # Web streaming (thread-safe)
@@ -187,24 +209,47 @@ class PeopleCounter:
         line = self.counting_line
 
         if event == cv2.EVENT_MOUSEMOVE:
-            self._hover = line.near(x, y)
-            if self._dragging:
-                if line.direction == "vertical":
-                    line.x = max(1, min(x, line.frame_w - 1))
+            ep = line.near_endpoint(x, y)
+            self._hover = bool(ep) or line.near(x, y)
+
+            if self._drag_endpoint:
+                nx = max(0.0, min(1.0, x / line.frame_w))
+                ny = max(0.0, min(1.0, y / line.frame_h))
+                if self._drag_endpoint == 1:
+                    line.x1n, line.y1n = nx, ny
                 else:
-                    line.y = max(1, min(y, line.frame_h - 1))
-                # Posisi berubah — side lama tidak valid lagi
+                    line.x2n, line.y2n = nx, ny
+                self.last_side.clear()
+                self.crossed_ids.clear()
+            elif self._dragging:
+                mx, my = self._drag_start
+                dx = (x - mx) / line.frame_w
+                dy = (y - my) / line.frame_h
+                x1s, y1s = self._drag_p1_start
+                x2s, y2s = self._drag_p2_start
+                line.x1n = max(0.0, min(1.0, x1s + dx))
+                line.y1n = max(0.0, min(1.0, y1s + dy))
+                line.x2n = max(0.0, min(1.0, x2s + dx))
+                line.y2n = max(0.0, min(1.0, y2s + dy))
                 self.last_side.clear()
                 self.crossed_ids.clear()
 
-        elif event == cv2.EVENT_LBUTTONDOWN and line.near(x, y):
-            self._dragging = True
+        elif event == cv2.EVENT_LBUTTONDOWN:
+            ep = line.near_endpoint(x, y)
+            if ep:
+                self._drag_endpoint = ep
+            elif line.near(x, y):
+                self._dragging = True
+                self._drag_start = (x, y)
+                self._drag_p1_start = (line.x1n, line.y1n)
+                self._drag_p2_start = (line.x2n, line.y2n)
 
         elif event == cv2.EVENT_LBUTTONUP:
-            if self._dragging:
-                self._dragging = False
-                pos = line.x / line.frame_w if line.direction == "vertical" else line.y / line.frame_h
-                print(f"[Garis] Posisi baru: {pos:.2%}", flush=True)
+            if self._drag_endpoint or self._dragging:
+                print(f"[Garis] P1=({line.x1n:.2f},{line.y1n:.2f}) "
+                      f"P2=({line.x2n:.2f},{line.y2n:.2f})", flush=True)
+            self._drag_endpoint = 0
+            self._dragging = False
 
     # ─── Setup video writer ────────────────────────────────────────────────────
     def _make_writer(self, cap, line: CountingLine):
@@ -235,25 +280,22 @@ class PeopleCounter:
             cv2.putText(frame, text, (18, 38 + i * 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
 
-        # Label garis + hint drag
-        if self._dragging:
+        # Label garis di titik tengah
+        mid_x = (self.counting_line.p1[0] + self.counting_line.p2[0]) // 2
+        mid_y = (self.counting_line.p1[1] + self.counting_line.p2[1]) // 2
+
+        if self._dragging or self._drag_endpoint:
             label = "Geser..."
             label_color = (255, 255, 255)
         elif self._hover:
-            label = "Garis Hitung  [klik & geser]"
+            label = "Drag endpoint/garis"
             label_color = (0, 165, 255)
         else:
             label = "Garis Hitung"
             label_color = (0, 255, 255)
 
-        if self.line_dir == "vertical":
-            lx = self.counting_line.x
-            cv2.putText(frame, label, (lx + 5, 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 1)
-        else:
-            ly = self.counting_line.y
-            cv2.putText(frame, label, (5, ly - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 1)
+        cv2.putText(frame, label, (mid_x + 8, mid_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 1)
 
     # ─── Proses satu frame ─────────────────────────────────────────────────────
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -313,10 +355,10 @@ class PeopleCounter:
 
                 if side == 1:
                     self.count_right += 1
-                    direction_label = "kanan" if self.line_dir == "vertical" else "bawah"
+                    direction_label = "A"
                 else:
                     self.count_left += 1
-                    direction_label = "kiri" if self.line_dir == "vertical" else "atas"
+                    direction_label = "B"
 
                 ts = datetime.now().strftime("%H:%M:%S")
                 print(f"[{ts}] Orang #{self.total_count} terdeteksi (ID:{tid}) → {direction_label}")
@@ -352,19 +394,20 @@ class PeopleCounter:
 
     def get_line_info(self) -> dict:
         if not hasattr(self, "counting_line"):
-            return {"direction": self.line_dir, "pos": self.line_pos}
+            return {"x1": self.line_p1[0], "y1": self.line_p1[1],
+                    "x2": self.line_p2[0], "y2": self.line_p2[1]}
         line = self.counting_line
-        pos = line.x / line.frame_w if line.direction == "vertical" else line.y / line.frame_h
-        return {"direction": line.direction, "pos": round(pos, 4)}
+        return {"x1": round(line.x1n, 4), "y1": round(line.y1n, 4),
+                "x2": round(line.x2n, 4), "y2": round(line.y2n, 4)}
 
-    def set_line_pos(self, pos: float) -> None:
+    def set_line(self, x1: float, y1: float, x2: float, y2: float) -> None:
         if not hasattr(self, "counting_line"):
             return
         line = self.counting_line
-        if line.direction == "vertical":
-            line.x = max(1, min(int(pos * line.frame_w), line.frame_w - 1))
-        else:
-            line.y = max(1, min(int(pos * line.frame_h), line.frame_h - 1))
+        line.x1n = max(0.0, min(1.0, x1))
+        line.y1n = max(0.0, min(1.0, y1))
+        line.x2n = max(0.0, min(1.0, x2))
+        line.y2n = max(0.0, min(1.0, y2))
         self.last_side.clear()
         self.crossed_ids.clear()
 
@@ -424,14 +467,14 @@ class PeopleCounter:
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or -1
 
-        self.counting_line = CountingLine(self.line_pos, self.line_dir, w, h)
+        self.counting_line = CountingLine(*self.line_p1, *self.line_p2, w, h)
         writer = self._make_writer(cap, self.counting_line)
 
         print(f"\n{'='*50}")
         print(f"  People Counter - CCTV AI")
         print(f"  Sumber     : {self.source}")
         print(f"  Resolusi   : {w}x{h}")
-        print(f"  Garis      : {self.line_dir} @ {self.line_pos:.0%}")
+        print(f"  Garis      : P1={self.line_p1} → P2={self.line_p2}")
         print(f"  Inf. size  : {self.inference_size}px")
         print(f"  Tekan Q untuk berhenti | R untuk reset hitungan")
         print(f"  Drag garis kuning untuk memindahkan posisi hitung")
@@ -545,13 +588,21 @@ def parse_args():
         type=float,
         default=DEFAULT_LINE_POS,
         metavar="0.0–1.0",
-        help="Posisi garis hitung (default: %(default)s = tengah frame)",
+        help="Posisi garis (default: %(default)s = tengah). Diabaikan jika --line-p1/p2 diisi.",
     )
     parser.add_argument(
         "--line-dir",
-        choices=["vertical", "horizontal"],
+        choices=["vertical", "horizontal", "diagonal-nw", "diagonal-ne"],
         default=DEFAULT_LINE_DIR,
-        help="Arah garis (default: %(default)s). vertical=orang jalan kiri-kanan, horizontal=orang jalan atas-bawah",
+        help="Arah garis: vertical/horizontal/diagonal-nw(↘)/diagonal-ne(↗)  (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--line-p1", metavar="X,Y",
+        help="Endpoint P1 ternormalisasi, contoh: '0.2,0.1'  (override --line-pos/dir)",
+    )
+    parser.add_argument(
+        "--line-p2", metavar="X,Y",
+        help="Endpoint P2 ternormalisasi, contoh: '0.8,0.9'  (override --line-pos/dir)",
     )
     parser.add_argument(
         "--output",
@@ -590,7 +641,26 @@ def parse_args():
         help="Ukuran input inferensi YOLOv8 (default: %(default)s). "
              "Lebih kecil=lebih cepat, lebih besar=lebih akurat. Pilihan: 160/320/480/640",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # Hitung p1/p2 dari argumen
+    if args.line_p1 and args.line_p2:
+        p1 = tuple(float(v) for v in args.line_p1.split(","))
+        p2 = tuple(float(v) for v in args.line_p2.split(","))
+    else:
+        pos = args.line_pos
+        d   = args.line_dir
+        if d == "vertical":
+            p1, p2 = (pos, 0.0), (pos, 1.0)
+        elif d == "horizontal":
+            p1, p2 = (0.0, pos), (1.0, pos)
+        elif d == "diagonal-nw":
+            p1, p2 = (0.0, 0.0), (1.0, 1.0)
+        else:  # diagonal-ne
+            p1, p2 = (1.0, 0.0), (0.0, 1.0)
+    args.computed_p1 = p1
+    args.computed_p2 = p2
+    return args
 
 
 if __name__ == "__main__":
@@ -598,8 +668,8 @@ if __name__ == "__main__":
     counter = PeopleCounter(
         source=args.source,
         model_path=args.model,
-        line_pos=args.line_pos,
-        line_dir=args.line_dir,
+        line_p1=args.computed_p1,
+        line_p2=args.computed_p2,
         output=args.output,
         show=not args.no_show,
         save_log=not args.no_log,

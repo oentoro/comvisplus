@@ -30,8 +30,8 @@ class CameraManager:
         self,
         url: str,
         label: str = "",
-        line_pos: float = DEFAULT_LINE_POS,
-        line_dir: str = DEFAULT_LINE_DIR,
+        line_p1: tuple = (0.5, 0.0),
+        line_p2: tuple = (0.5, 1.0),
         reconnect_delay: int = 5,
         max_reconnects: int = 0,
         inference_size: int = 320,
@@ -39,8 +39,8 @@ class CameraManager:
         cam_id = uuid.uuid4().hex[:8]
         counter = PeopleCounter(
             source=url,
-            line_pos=line_pos,
-            line_dir=line_dir,
+            line_p1=tuple(line_p1),
+            line_p2=tuple(line_p2),
             show=False,
             save_log=True,
             reconnect_delay=reconnect_delay,
@@ -54,8 +54,8 @@ class CameraManager:
                 "thread": thread,
                 "label": label or url,
                 "url": url,
-                "line_pos": line_pos,
-                "line_dir": line_dir,
+                "line_p1": list(line_p1),
+                "line_p2": list(line_p2),
             }
         thread.start()
         return cam_id
@@ -72,10 +72,11 @@ class CameraManager:
         with self._lock:
             return self._cams.get(cam_id)
 
-    def update_line_pos(self, cam_id: str, pos: float) -> None:
+    def update_line(self, cam_id: str, x1: float, y1: float, x2: float, y2: float) -> None:
         with self._lock:
             if cam_id in self._cams:
-                self._cams[cam_id]["line_pos"] = pos
+                self._cams[cam_id]["line_p1"] = [x1, y1]
+                self._cams[cam_id]["line_p2"] = [x2, y2]
 
     def list_all(self) -> list[dict]:
         with self._lock:
@@ -84,8 +85,7 @@ class CameraManager:
                     "id": cid,
                     "label": c["label"],
                     "url": c["url"],
-                    "line_pos": c["line_pos"],
-                    "line_dir": c["line_dir"],
+                    **c["counter"].get_line_info(),
                     **c["counter"].get_stats(),
                 }
                 for cid, c in self._cams.items()
@@ -97,8 +97,8 @@ class CameraManager:
                 {
                     "url": c["url"],
                     "label": c["label"],
-                    "line_pos": c["line_pos"],
-                    "line_dir": c["line_dir"],
+                    "line_p1": c["line_p1"],
+                    "line_p2": c["line_p2"],
                 }
                 for c in self._cams.values()
             ]
@@ -119,12 +119,18 @@ def _load_cameras() -> None:
     try:
         entries = json.loads(CAMERAS_FILE.read_text())
         for e in entries:
-            mgr.add(
-                url=e["url"],
-                label=e.get("label", ""),
-                line_pos=e.get("line_pos", DEFAULT_LINE_POS),
-                line_dir=e.get("line_dir", DEFAULT_LINE_DIR),
-            )
+            # Backward compat: format lama memakai line_pos/line_dir
+            if "line_p1" in e and "line_p2" in e:
+                p1 = tuple(e["line_p1"])
+                p2 = tuple(e["line_p2"])
+            else:
+                pos = e.get("line_pos", DEFAULT_LINE_POS)
+                d   = e.get("line_dir", DEFAULT_LINE_DIR)
+                if d == "horizontal":
+                    p1, p2 = (0.0, pos), (1.0, pos)
+                else:
+                    p1, p2 = (pos, 0.0), (pos, 1.0)
+            mgr.add(url=e["url"], label=e.get("label", ""), line_p1=p1, line_p2=p2)
         print(f"  {len(entries)} kamera dimuat dari {CAMERAS_FILE}")
     except Exception as ex:
         print(f"  Peringatan: gagal memuat cameras.json — {ex}")
@@ -148,11 +154,13 @@ def add_camera():
     url = d.get("url", "").strip()
     if not url:
         return jsonify(error="url wajib diisi"), 400
+    p1 = (float(d.get("x1", 0.5)), float(d.get("y1", 0.0)))
+    p2 = (float(d.get("x2", 0.5)), float(d.get("y2", 1.0)))
     cam_id = mgr.add(
         url=url,
         label=d.get("label", "").strip(),
-        line_pos=float(d.get("line_pos", DEFAULT_LINE_POS)),
-        line_dir=d.get("line_dir", DEFAULT_LINE_DIR),
+        line_p1=p1,
+        line_p2=p2,
     )
     _save_cameras()
     return jsonify(id=cam_id), 201
@@ -224,9 +232,11 @@ def camera_line(cam_id):
     cam = mgr.get(cam_id)
     if cam is None:
         return jsonify(error="not found"), 404
-    pos = float(request.get_json()["pos"])
-    cam["counter"].set_line_pos(pos)
-    mgr.update_line_pos(cam_id, pos)
+    d = request.get_json()
+    x1, y1 = float(d["x1"]), float(d["y1"])
+    x2, y2 = float(d["x2"]), float(d["y2"])
+    cam["counter"].set_line(x1, y1, x2, y2)
+    mgr.update_line(cam_id, x1, y1, x2, y2)
     _save_cameras()
     return jsonify(ok=True)
 
