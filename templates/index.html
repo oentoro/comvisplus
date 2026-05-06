@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>People Counter — CCTV AI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f1117;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      background: #1a1d27;
+      border-bottom: 1px solid #2d3044;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      flex-shrink: 0;
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    header h1 { font-size: 1rem; color: #38bdf8; font-weight: 600; }
+
+    /* ── Buttons ── */
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      white-space: nowrap;
+    }
+    .btn:active { transform: scale(0.96); }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-primary:hover { background: #3b82f6; }
+    .btn-primary:disabled { background: #1e3a5f; color: #6b7280; cursor: not-allowed; transform: none; }
+    .btn-danger  { background: #dc2626; color: #fff; padding: 6px 12px; font-size: 0.78rem; }
+    .btn-danger:hover  { background: #ef4444; }
+    .btn-ghost   { background: #2d3044; color: #d1d5db; }
+    .btn-ghost:hover   { background: #374151; }
+    .btn-icon {
+      background: none;
+      border: none;
+      color: #6b7280;
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      line-height: 1;
+      transition: color 0.15s, background 0.15s;
+    }
+    .btn-icon:hover { color: #f87171; background: rgba(248,113,113,0.1); }
+
+    /* ── Empty state ── */
+    #emptyState {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: #4b5563;
+      padding: 40px;
+    }
+    #emptyState.hidden { display: none; }
+    .empty-icon { font-size: 3.5rem; }
+    #emptyState h2 { font-size: 1.2rem; color: #6b7280; }
+    #emptyState p  { font-size: 0.9rem; }
+
+    /* ── Camera grid ── */
+    #cameraGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+      gap: 16px;
+      padding: 16px;
+      align-content: start;
+    }
+
+    /* ── Camera card ── */
+    .cam-card {
+      background: #1a1d27;
+      border: 1px solid #2d3044;
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .cam-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-bottom: 1px solid #2d3044;
+      gap: 8px;
+    }
+    .cam-label {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #e0e0e0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cam-header-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+
+    /* video wrapper */
+    .cam-video-wrapper {
+      position: relative;
+      background: #000;
+      line-height: 0;
+    }
+    .cam-feed {
+      width: 100%;
+      display: block;
+      aspect-ratio: 16/9;
+      object-fit: contain;
+      background: #000;
+    }
+    .cam-overlay {
+      position: absolute;
+      inset: 0;
+      cursor: default;
+      user-select: none;
+    }
+    .cam-drag-line {
+      position: absolute;
+      display: none;
+      pointer-events: none;
+    }
+    .cam-drag-line.vertical {
+      top: 0; bottom: 0;
+      width: 3px;
+      background: rgba(255,255,100,0.6);
+      box-shadow: 0 0 8px rgba(255,255,100,0.5);
+    }
+    .cam-drag-line.horizontal {
+      left: 0; right: 0;
+      height: 3px;
+      background: rgba(255,255,100,0.6);
+      box-shadow: 0 0 8px rgba(255,255,100,0.5);
+    }
+    .cam-drag-line.visible { display: block; }
+    .cam-drag-line.dragging { background: rgba(255,255,255,0.9); }
+    .cam-drag-line.vertical.dragging  { width: 4px; }
+    .cam-drag-line.horizontal.dragging { height: 4px; }
+
+    /* stats bar */
+    .cam-stats {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      padding: 10px 14px;
+      border-top: 1px solid #2d3044;
+    }
+    .stat-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .stat-item + .stat-item {
+      border-left: 1px solid #2d3044;
+    }
+    .stat-item-label { font-size: 0.65rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-item-val   { font-size: 1.3rem; font-weight: 700; line-height: 1.2; }
+    .val-total { color: #fff; }
+    .val-right { color: #4ade80; }
+    .val-left  { color: #60a5fa; }
+
+    .cam-status {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 14px 10px;
+    }
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #4b5563;
+      transition: background 0.3s;
+      flex-shrink: 0;
+    }
+    .status-dot.live  { background: #4ade80; animation: pulse 2s infinite; }
+    .status-dot.error { background: #f87171; }
+    .status-label { font-size: 0.72rem; color: #6b7280; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+    @keyframes flash { 0%{opacity:.4} 100%{opacity:1} }
+    .flash { animation: flash 0.35s ease-out; }
+
+    /* ── Modal ── */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 20px;
+    }
+    .modal-overlay.hidden { display: none; }
+    .modal-box {
+      background: #1a1d27;
+      border: 1px solid #2d3044;
+      border-radius: 14px;
+      width: 100%;
+      max-width: 460px;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid #2d3044;
+    }
+    .modal-header h2 { font-size: 1rem; color: #e0e0e0; }
+    .modal-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 16px 20px;
+      border-top: 1px solid #2d3044;
+    }
+
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-label { font-size: 0.8rem; color: #9ca3af; }
+    .form-label .req { color: #f87171; }
+    .form-input {
+      background: #0f1117;
+      border: 1px solid #2d3044;
+      border-radius: 8px;
+      padding: 9px 12px;
+      color: #e0e0e0;
+      font-size: 0.88rem;
+      width: 100%;
+      transition: border-color 0.15s;
+    }
+    .form-input:focus { outline: none; border-color: #3b82f6; }
+    .form-input::placeholder { color: #4b5563; }
+    select.form-input { cursor: pointer; }
+    input[type=range].form-input {
+      padding: 6px 0;
+      border: none;
+      background: none;
+      cursor: pointer;
+      accent-color: #3b82f6;
+    }
+    .range-row { display: flex; align-items: center; gap: 10px; }
+    .range-row input { flex: 1; }
+    .range-val { font-size: 0.85rem; color: #38bdf8; font-weight: 600; min-width: 40px; text-align: right; }
+
+    .form-error {
+      font-size: 0.8rem;
+      color: #f87171;
+      padding: 8px 12px;
+      background: rgba(248,113,113,0.1);
+      border-radius: 6px;
+      display: none;
+    }
+    .form-error.visible { display: block; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="header-left">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round">
+      <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
+      <line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/>
+      <line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/>
+    </svg>
+    <h1>People Counter &mdash; CCTV AI</h1>
+  </div>
+  <button class="btn btn-primary" onclick="showModal()">+ Tambah Kamera</button>
+</header>
+
+<!-- ── Empty state ── -->
+<div id="emptyState" class="hidden">
+  <div class="empty-icon">📷</div>
+  <h2>Belum ada kamera</h2>
+  <p>Tambahkan kamera CCTV Anda untuk mulai menghitung</p>
+  <button class="btn btn-primary" onclick="showModal()">+ Tambah Kamera</button>
+</div>
+
+<!-- ── Camera grid ── -->
+<div id="cameraGrid"></div>
+
+<!-- ── Modal tambah kamera ── -->
+<div id="modal" class="modal-overlay hidden" onclick="onModalBgClick(event)">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2>Tambah Kamera Baru</h2>
+      <button class="btn-icon" onclick="closeModal()" title="Tutup">&#x2715;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">URL RTSP <span class="req">*</span></label>
+        <input id="inputUrl" class="form-input" type="text"
+               placeholder="rtsp://user:password@192.168.1.x/stream">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Nama Kamera</label>
+        <input id="inputLabel" class="form-input" type="text"
+               placeholder="Depan Rumah">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Arah Garis Hitung</label>
+        <select id="inputDir" class="form-input">
+          <option value="vertical">Vertikal — orang berjalan kiri ↔ kanan</option>
+          <option value="horizontal">Horizontal — orang berjalan atas ↕ bawah</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Posisi Garis</label>
+        <div class="range-row">
+          <input id="inputPos" class="form-input" type="range" min="10" max="90" value="50"
+                 oninput="document.getElementById('posVal').textContent = this.value + '%'">
+          <span class="range-val" id="posVal">50%</span>
+        </div>
+      </div>
+      <div id="formError" class="form-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" id="btnAdd" onclick="submitAdd()">+ Tambah</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── State ─────────────────────────────────────────────────────────────────────
+// cameras: { [id]: { es: EventSource, lineDir: str, linePos: float, isDragging: bool } }
+const cameras = {};
+const grid    = document.getElementById('cameraGrid');
+const SNAP    = 14; // px tolerance untuk drag
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+(async function init() {
+  const list = await fetch('/cameras').then(r => r.json()).catch(() => []);
+  list.forEach(cam => mountCard(cam.id, cam.label, cam.line_dir, cam.line_pos));
+  updateEmpty();
+})();
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+function updateEmpty() {
+  const empty = document.getElementById('emptyState');
+  const hasCards = grid.children.length > 0;
+  empty.classList.toggle('hidden', hasCards);
+}
+
+// ── Card: mount ───────────────────────────────────────────────────────────────
+function mountCard(id, label, lineDir, linePos) {
+  const card = document.createElement('div');
+  card.className = 'cam-card';
+  card.id = `cam-${id}`;
+  card.innerHTML = cardHTML(id, label, lineDir);
+  grid.appendChild(card);
+
+  cameras[id] = { es: null, lineDir, linePos, isDragging: false };
+  applyLineStyle(id);
+  setupDrag(id);
+  setupSSE(id);
+  updateEmpty();
+}
+
+function cardHTML(id, label, lineDir) {
+  const dirClass = lineDir === 'vertical' ? 'vertical' : 'horizontal';
+  return `
+    <div class="cam-header">
+      <span class="cam-label" title="${escHtml(label)}">${escHtml(label)}</span>
+      <div class="cam-header-actions">
+        <button class="btn btn-danger" onclick="resetCam('${id}')">&#x21BA; Reset</button>
+        <button class="btn-icon" onclick="removeCam('${id}')" title="Hapus kamera">&#x2715;</button>
+      </div>
+    </div>
+    <div class="cam-video-wrapper">
+      <img class="cam-feed" id="feed-${id}" src="/cameras/${id}/feed" alt="Loading...">
+      <div class="cam-overlay" id="overlay-${id}">
+        <div class="cam-drag-line ${dirClass}" id="dragline-${id}"></div>
+      </div>
+    </div>
+    <div class="cam-stats">
+      <div class="stat-item">
+        <span class="stat-item-label">Total</span>
+        <span class="stat-item-val val-total" id="s-total-${id}">—</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-item-label">Kanan / Bawah &#x25B6;</span>
+        <span class="stat-item-val val-right" id="s-right-${id}">—</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-item-label">&#x25C0; Kiri / Atas</span>
+        <span class="stat-item-val val-left" id="s-left-${id}">—</span>
+      </div>
+    </div>
+    <div class="cam-status">
+      <div class="status-dot" id="dot-${id}"></div>
+      <span class="status-label" id="status-${id}">Menghubungkan...</span>
+    </div>`;
+}
+
+// ── Card: remove ──────────────────────────────────────────────────────────────
+function unmountCard(id) {
+  cameras[id]?.es?.close();
+  delete cameras[id];
+  document.getElementById(`feed-${id}`)?.setAttribute('src', '');
+  document.getElementById(`cam-${id}`)?.remove();
+  updateEmpty();
+}
+
+async function removeCam(id) {
+  if (!confirm('Hapus kamera ini?')) return;
+  unmountCard(id);
+  await fetch(`/cameras/${id}`, { method: 'DELETE' });
+}
+
+// ── Card: reset ───────────────────────────────────────────────────────────────
+function resetCam(id) {
+  fetch(`/cameras/${id}/reset`, { method: 'POST' });
+}
+
+// ── SSE: real-time stats ──────────────────────────────────────────────────────
+function setupSSE(id) {
+  const es = new EventSource(`/cameras/${id}/stats`);
+  cameras[id].es = es;
+
+  es.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    if (d.removed) { unmountCard(id); return; }
+
+    setStatVal(`s-total-${id}`, d.total);
+    setStatVal(`s-right-${id}`, d.right);
+    setStatVal(`s-left-${id}`,  d.left);
+
+    const dot    = document.getElementById(`dot-${id}`);
+    const status = document.getElementById(`status-${id}`);
+    if (dot)    dot.className    = 'status-dot live';
+    if (status) status.textContent = 'Live';
+  };
+
+  es.onerror = () => {
+    const dot    = document.getElementById(`dot-${id}`);
+    const status = document.getElementById(`status-${id}`);
+    if (dot)    dot.className    = 'status-dot error';
+    if (status) status.textContent = 'Koneksi terputus...';
+  };
+}
+
+function setStatVal(elId, val) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (el.textContent !== String(val)) {
+    el.textContent = val;
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+  }
+}
+
+// ── Drag garis ────────────────────────────────────────────────────────────────
+function applyLineStyle(id) {
+  const state = cameras[id];
+  const el    = document.getElementById(`dragline-${id}`);
+  if (!el || !state) return;
+  if (state.lineDir === 'vertical') {
+    el.style.left = (state.linePos * 100) + '%';
+    el.style.top  = '';
+  } else {
+    el.style.top  = (state.linePos * 100) + '%';
+    el.style.left = '';
+  }
+}
+
+function getOverlayRel(e, overlay) {
+  const r = overlay.getBoundingClientRect();
+  return {
+    x:  (e.clientX - r.left) / r.width,
+    y:  (e.clientY - r.top)  / r.height,
+    px:  e.clientX - r.left,
+    py:  e.clientY - r.top,
+    w:   r.width,
+    h:   r.height,
+  };
+}
+
+function nearLine(state, px, py, w, h) {
+  if (state.lineDir === 'vertical')
+    return Math.abs(px - state.linePos * w) <= SNAP;
+  return Math.abs(py - state.linePos * h) <= SNAP;
+}
+
+function setupDrag(id) {
+  const overlay  = document.getElementById(`overlay-${id}`);
+  const dragLine = document.getElementById(`dragline-${id}`);
+  if (!overlay || !dragLine) return;
+
+  overlay.addEventListener('mousemove', (e) => {
+    const state = cameras[id];
+    if (!state) return;
+    const { x, y, px, py, w, h } = getOverlayRel(e, overlay);
+
+    if (state.isDragging) {
+      state.linePos = state.lineDir === 'vertical'
+        ? Math.max(0.01, Math.min(0.99, x))
+        : Math.max(0.01, Math.min(0.99, y));
+      applyLineStyle(id);
+      overlay.style.cursor = state.lineDir === 'vertical' ? 'ew-resize' : 'ns-resize';
+    } else {
+      if (nearLine(state, px, py, w, h)) {
+        dragLine.classList.add('visible');
+        overlay.style.cursor = state.lineDir === 'vertical' ? 'ew-resize' : 'ns-resize';
+      } else {
+        dragLine.classList.remove('visible');
+        overlay.style.cursor = 'default';
+      }
+    }
+  });
+
+  overlay.addEventListener('mousedown', (e) => {
+    const state = cameras[id];
+    if (!state) return;
+    const { px, py, w, h } = getOverlayRel(e, overlay);
+    if (!nearLine(state, px, py, w, h)) return;
+    state.isDragging = true;
+    dragLine.classList.add('visible', 'dragging');
+    e.preventDefault();
+  });
+
+  overlay.addEventListener('mouseleave', () => {
+    const state = cameras[id];
+    if (state && !state.isDragging) dragLine.classList.remove('visible');
+  });
+}
+
+// mouseup global agar drag tidak stuck jika kursor keluar window
+document.addEventListener('mouseup', (e) => {
+  Object.entries(cameras).forEach(([id, state]) => {
+    if (!state.isDragging) return;
+    state.isDragging = false;
+    const dragLine = document.getElementById(`dragline-${id}`);
+    const overlay  = document.getElementById(`overlay-${id}`);
+    dragLine?.classList.remove('dragging', 'visible');
+    if (overlay) overlay.style.cursor = 'default';
+    fetch(`/cameras/${id}/line`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pos: state.linePos }),
+    });
+  });
+});
+
+// ── Modal ─────────────────────────────────────────────────────────────────────
+function showModal() {
+  document.getElementById('inputUrl').value   = '';
+  document.getElementById('inputLabel').value = '';
+  document.getElementById('inputDir').value   = 'vertical';
+  document.getElementById('inputPos').value   = '50';
+  document.getElementById('posVal').textContent = '50%';
+  document.getElementById('formError').classList.remove('visible');
+  document.getElementById('btnAdd').disabled  = false;
+  document.getElementById('btnAdd').textContent = '+ Tambah';
+  document.getElementById('modal').classList.remove('hidden');
+  setTimeout(() => document.getElementById('inputUrl').focus(), 50);
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.add('hidden');
+}
+
+function onModalBgClick(e) {
+  if (e.target === document.getElementById('modal')) closeModal();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
+});
+
+async function submitAdd() {
+  const url   = document.getElementById('inputUrl').value.trim();
+  const label = document.getElementById('inputLabel').value.trim();
+  const dir   = document.getElementById('inputDir').value;
+  const pos   = parseInt(document.getElementById('inputPos').value, 10) / 100;
+
+  const errEl = document.getElementById('formError');
+  if (!url) {
+    errEl.textContent = 'URL RTSP wajib diisi.';
+    errEl.classList.add('visible');
+    document.getElementById('inputUrl').focus();
+    return;
+  }
+
+  const btn = document.getElementById('btnAdd');
+  btn.disabled = true;
+  btn.textContent = 'Menambahkan...';
+  errEl.classList.remove('visible');
+
+  try {
+    const res = await fetch('/cameras', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, label, line_pos: pos, line_dir: dir }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Gagal menambahkan kamera');
+    closeModal();
+    mountCard(data.id, label || url, dir, pos);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.add('visible');
+    btn.disabled = false;
+    btn.textContent = '+ Tambah';
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+
+</body>
+</html>
