@@ -105,6 +105,7 @@ class CameraManager:
         reconnect_delay: int = 5,
         max_reconnects: int = 0,
         inference_size: int = 320,
+        frame_skip: int = 2,
     ) -> str:
         cam_id = uuid.uuid4().hex[:8]
         counter = PeopleCounter(
@@ -116,6 +117,7 @@ class CameraManager:
             reconnect_delay=reconnect_delay,
             max_reconnects=max_reconnects,
             inference_size=inference_size,
+            frame_skip=frame_skip,
         )
         thread = threading.Thread(target=counter.run, daemon=True, name=f"cam-{cam_id}")
         with self._lock:
@@ -126,6 +128,7 @@ class CameraManager:
                 "url": url,
                 "line_p1": list(line_p1),
                 "line_p2": list(line_p2),
+                "frame_skip": frame_skip,
             }
         thread.start()
         return cam_id
@@ -155,6 +158,7 @@ class CameraManager:
                     "id": cid,
                     "label": c["label"],
                     "url": c["url"],
+                    "frame_skip": c["frame_skip"],
                     **c["counter"].get_line_info(),
                     **c["counter"].get_stats(),
                 }
@@ -169,6 +173,7 @@ class CameraManager:
                     "label": c["label"],
                     "line_p1": c["line_p1"],
                     "line_p2": c["line_p2"],
+                    "frame_skip": c["frame_skip"],
                 }
                 for c in self._cams.values()
             ]
@@ -199,7 +204,8 @@ def _load_cameras() -> None:
                     p1, p2 = (0.0, pos), (1.0, pos)
                 else:
                     p1, p2 = (pos, 0.0), (pos, 1.0)
-            mgr.add(url=e["url"], label=e.get("label", ""), line_p1=p1, line_p2=p2)
+            mgr.add(url=e["url"], label=e.get("label", ""), line_p1=p1, line_p2=p2,
+                    frame_skip=e.get("frame_skip", 2))
         print(f"  {len(entries)} kamera dimuat dari {CAMERAS_FILE}")
     except Exception as ex:
         print(f"  Peringatan: gagal memuat cameras.json — {ex}")
@@ -233,6 +239,7 @@ def add_camera():
         label=d.get("label", "").strip(),
         line_p1=p1,
         line_p2=p2,
+        frame_skip=int(d.get("frame_skip", 2)),
     )
     _save_cameras()
     return jsonify(id=cam_id), 201

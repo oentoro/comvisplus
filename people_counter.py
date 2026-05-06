@@ -27,6 +27,11 @@ PERSON_CLASS_ID = 0            # COCO class 0 = person
 CONF_THRESHOLD = 0.3
 MIN_TRACK_FRAMES = 3           # frame minimum sebelum track dihitung valid
 
+# Satu lock global: memastikan hanya satu kamera yang inferensi pada satu waktu.
+# Tiap kamera tetap punya model sendiri (agar tracker ByteTrack tidak tabrakan),
+# tapi eksekusi di-serialisasi sehingga tidak ada CPU thrashing antar thread.
+_INFER_LOCK = threading.Lock()
+
 
 class CountingLine:
     """Garis hitung virtual — mendukung vertikal, horizontal, dan diagonal.
@@ -101,6 +106,7 @@ class PeopleCounter:
         reconnect_delay: int = 5,
         max_reconnects: int = 0,
         inference_size: int = 320,
+        frame_skip: int = 1,
     ):
         self.source = source
         self.model = YOLO(model_path)
@@ -113,6 +119,7 @@ class PeopleCounter:
         self.reconnect_delay = reconnect_delay
         self.max_reconnects = max_reconnects  # 0 = reconnect selamanya
         self.inference_size = inference_size  # ukuran input model (320 lebih cepat dari 640)
+        self.frame_skip = max(1, frame_skip)  # proses 1 dari setiap frame_skip frame
 
         self._screenshot_dir = Path("screenshots")
         self._screenshot_queue: list[int] = []  # count values yang menunggu screenshot
@@ -317,15 +324,16 @@ class PeopleCounter:
 
     # ─── Proses satu frame ─────────────────────────────────────────────────────
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
-        results = self.model.track(
-            frame,
-            persist=True,
-            classes=[PERSON_CLASS_ID],
-            conf=CONF_THRESHOLD,
-            tracker="bytetrack.yaml",
-            imgsz=self.inference_size,
-            verbose=False,
-        )
+        with _INFER_LOCK:
+            results = self.model.track(
+                frame,
+                persist=True,
+                classes=[PERSON_CLASS_ID],
+                conf=CONF_THRESHOLD,
+                tracker="bytetrack.yaml",
+                imgsz=self.inference_size,
+                verbose=False,
+            )
 
         if results[0].boxes.id is None:
             return frame
@@ -539,7 +547,10 @@ class PeopleCounter:
 
             # ── Inferensi + render ────────────────────────────────────────────
             frame_count += 1
-            frame = self._process_frame(frame)
+            # Jalankan inferensi hanya setiap frame_skip frame; frame yang
+            # dilewati tetap di-stream (dengan garis tapi tanpa bounding box).
+            if frame_count % self.frame_skip == 0:
+                frame = self._process_frame(frame)
             line_state = "drag" if self._dragging else ("hover" if self._hover else "normal")
             self.counting_line.draw(frame, state=line_state)
 
@@ -673,6 +684,14 @@ def parse_args():
         help="Ukuran input inferensi YOLOv8 (default: %(default)s). "
              "Lebih kecil=lebih cepat, lebih besar=lebih akurat. Pilihan: 160/320/480/640",
     )
+    parser.add_argument(
+        "--frame-skip",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Inferensi setiap N frame; frame lain di-stream tanpa deteksi. "
+             "1=setiap frame, 2=setiap 2 frame, dst. (default: %(default)s)",
+    )
     args = parser.parse_args()
 
     # Hitung p1/p2 dari argumen
@@ -709,5 +728,6 @@ if __name__ == "__main__":
         reconnect_delay=args.reconnect_delay,
         max_reconnects=args.max_reconnects,
         inference_size=args.imgsz,
+        frame_skip=args.frame_skip,
     )
     counter.run()

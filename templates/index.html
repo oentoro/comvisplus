@@ -429,6 +429,16 @@
         </select>
         <span class="form-hint">Posisi dapat diubah dengan drag setelah kamera ditambahkan.</span>
       </div>
+      <div class="form-group">
+        <label class="form-label">Frame Skip (performa)</label>
+        <select id="inputFrameSkip" class="form-input">
+          <option value="1">1 — setiap frame (1 kamera)</option>
+          <option value="2" selected>2 — setiap 2 frame (2–3 kamera) ★</option>
+          <option value="3">3 — setiap 3 frame (3–4 kamera)</option>
+          <option value="4">4 — setiap 4 frame (4+ kamera)</option>
+        </select>
+        <span class="form-hint">Inferensi dijalankan 1 dari N frame. Counting tetap akurat; streaming tidak terpengaruh.</span>
+      </div>
       <div id="formError" class="form-error"></div>
     </div>
     <div class="modal-footer">
@@ -481,7 +491,7 @@ const PRESETS = {
 // ── Init ─────────────────────────────────────────────────────────────────────
 (async function init() {
   const list = await fetch('/cameras').then(r => r.json()).catch(() => []);
-  list.forEach(cam => mountCard(cam.id, cam.label, cam.x1, cam.y1, cam.x2, cam.y2));
+  list.forEach(cam => mountCard(cam.id, cam.label, cam.x1, cam.y1, cam.x2, cam.y2, cam.frame_skip || 2));
   updateEmpty();
   updateSSBadge();
 })();
@@ -493,11 +503,11 @@ function updateEmpty() {
 }
 
 // ── Card: mount ───────────────────────────────────────────────────────────────
-function mountCard(id, label, x1, y1, x2, y2) {
+function mountCard(id, label, x1, y1, x2, y2, frameSkip) {
   const card = document.createElement('div');
   card.className = 'cam-card';
   card.id = `cam-${id}`;
-  card.innerHTML = cardHTML(id, label);
+  card.innerHTML = cardHTML(id, label, frameSkip);
   grid.appendChild(card);
 
   cameras[id] = { es: null, x1, y1, x2, y2, drag: null, dragStart: null };
@@ -508,7 +518,7 @@ function mountCard(id, label, x1, y1, x2, y2) {
   updateEmpty();
 }
 
-function cardHTML(id, label) {
+function cardHTML(id, label, frameSkip) {
   return `
     <div class="cam-header">
       <span class="cam-label" title="${escHtml(label)}">${escHtml(label)}</span>
@@ -543,6 +553,7 @@ function cardHTML(id, label) {
     <div class="cam-status">
       <div class="status-dot" id="dot-${id}"></div>
       <span class="status-label" id="status-${id}">Menghubungkan...</span>
+      <span style="margin-left:auto;font-size:0.65rem;color:#4b5563">skip=${frameSkip || 2}</span>
     </div>`;
 }
 
@@ -729,9 +740,10 @@ document.addEventListener('mouseup', () => {
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 function showModal() {
-  document.getElementById('inputUrl').value    = '';
-  document.getElementById('inputLabel').value  = '';
-  document.getElementById('inputPreset').value = 'vertical';
+  document.getElementById('inputUrl').value       = '';
+  document.getElementById('inputLabel').value     = '';
+  document.getElementById('inputPreset').value    = 'vertical';
+  document.getElementById('inputFrameSkip').value = '2';
   document.getElementById('formError').classList.remove('visible');
   document.getElementById('btnAdd').disabled    = false;
   document.getElementById('btnAdd').textContent = '+ Tambah';
@@ -755,9 +767,10 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function submitAdd() {
-  const url    = document.getElementById('inputUrl').value.trim();
-  const label  = document.getElementById('inputLabel').value.trim();
-  const preset = document.getElementById('inputPreset').value;
+  const url       = document.getElementById('inputUrl').value.trim();
+  const label     = document.getElementById('inputLabel').value.trim();
+  const preset    = document.getElementById('inputPreset').value;
+  const frameSkip = parseInt(document.getElementById('inputFrameSkip').value, 10);
   const { x1, y1, x2, y2 } = PRESETS[preset] || PRESETS['vertical'];
 
   const errEl = document.getElementById('formError');
@@ -777,12 +790,12 @@ async function submitAdd() {
     const res = await fetch('/cameras', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, label, x1, y1, x2, y2 }),
+      body: JSON.stringify({ url, label, x1, y1, x2, y2, frame_skip: frameSkip }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Gagal menambahkan kamera');
     closeModal();
-    mountCard(data.id, label || url, x1, y1, x2, y2);
+    mountCard(data.id, label || url, x1, y1, x2, y2, frameSkip);
   } catch (err) {
     errEl.textContent = err.message;
     errEl.classList.add('visible');
