@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — People Counter</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f1117;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .login-card {
+      background: #1a1d27;
+      border: 1px solid #2d3044;
+      border-radius: 16px;
+      padding: 36px 32px 32px;
+      width: 100%;
+      max-width: 380px;
+    }
+
+    .login-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 28px;
+    }
+    .login-logo h1 {
+      font-size: 1.05rem;
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+    .form-label {
+      font-size: 0.8rem;
+      color: #9ca3af;
+    }
+    .form-input {
+      background: #0f1117;
+      border: 1px solid #2d3044;
+      border-radius: 8px;
+      padding: 10px 13px;
+      color: #e0e0e0;
+      font-size: 0.9rem;
+      width: 100%;
+      transition: border-color 0.15s;
+    }
+    .form-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+    }
+
+    .btn-login {
+      width: 100%;
+      padding: 11px;
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 6px;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn-login:hover  { background: #3b82f6; }
+    .btn-login:active { transform: scale(0.98); }
+
+    .error-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(248,113,113,0.1);
+      border: 1px solid rgba(248,113,113,0.25);
+      color: #f87171;
+      border-radius: 8px;
+      padding: 10px 13px;
+      font-size: 0.85rem;
+      margin-bottom: 18px;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="login-logo">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+           stroke="#38bdf8" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
+        <line x1="12" y1="2"  x2="12" y2="5"/>
+        <line x1="12" y1="19" x2="12" y2="22"/>
+        <line x1="2"  y1="12" x2="5"  y2="12"/>
+        <line x1="19" y1="12" x2="22" y2="12"/>
+      </svg>
+      <h1>People Counter — CCTV AI</h1>
+    </div>
+
+    {% if error %}
+    <div class="error-box">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" flex-shrink="0">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/>
+        <line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="post" autocomplete="on">
+      <div class="form-group">
+        <label class="form-label" for="username">Username</label>
+        <input id="username" class="form-input" type="text" name="username"
+               autocomplete="username" autofocus
+               value="{{ request.form.get('username', '') }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="password">Password</label>
+        <input id="password" class="form-input" type="password" name="password"
+               autocomplete="current-password">
+      </div>
+      <button class="btn-login" type="submit">Masuk</button>
+    </form>
+  </div>
+</body>
+</html>

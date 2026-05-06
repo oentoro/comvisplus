@@ -2,22 +2,91 @@
 Web server multi-kamera untuk People Counter CCTV.
 Jalankan : python web_server.py
 Akses    : http://<ip-server>:5000
+
+Kredensial dikonfigurasi lewat environment variable:
+  AUTH_USERNAME  (default: admin)
+  AUTH_PASSWORD  (default: admin)
+  SECRET_KEY     (dianjurkan diset untuk sesi yang persisten)
 """
 
 import argparse
+import functools
 import json
+import os
 import threading
 import time
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request, send_from_directory
+from flask import (Flask, Response, jsonify, redirect, render_template,
+                   request, send_from_directory, session, url_for)
 
-from people_counter import DEFAULT_LINE_DIR, DEFAULT_LINE_POS, DEFAULT_MODEL, PeopleCounter
+from people_counter import DEFAULT_LINE_DIR, DEFAULT_LINE_POS, PeopleCounter
 
 CAMERAS_FILE    = Path("cameras.json")
 SCREENSHOTS_DIR = Path("screenshots")
+
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(24)
+app.permanent_session_lifetime = timedelta(days=7)
+
+# Diset ke False lewat --no-auth di CLI
+_auth_enabled = True
+
+
+# ─── Auth ──────────────────────────────────────────────────────────────────────
+
+def _get_creds() -> tuple[str, str]:
+    return (
+        os.environ.get("AUTH_USERNAME", "admin"),
+        os.environ.get("AUTH_PASSWORD", "admin"),
+    )
+
+
+def login_required(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        if not _auth_enabled or session.get("logged_in"):
+            return f(*args, **kwargs)
+        # API calls (JSON/stream) kembalikan 401; page requests redirect ke login
+        if _wants_json_or_stream():
+            return jsonify(error="Unauthorized"), 401
+        return redirect(url_for("login_page", next=request.path))
+    return decorated
+
+
+def _wants_json_or_stream() -> bool:
+    """True jika request adalah AJAX/SSE/stream, bukan navigasi browser biasa."""
+    accept = request.headers.get("Accept", "")
+    return (
+        "application/json" in accept
+        or "text/event-stream" in accept
+        or "multipart/x-mixed-replace" in accept
+        or request.method in ("POST", "DELETE", "PUT", "PATCH")
+    )
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login_page():
+    if session.get("logged_in"):
+        return redirect(url_for("index"))
+    error = None
+    if request.method == "POST":
+        username, password = _get_creds()
+        if (request.form.get("username") == username and
+                request.form.get("password") == password):
+            session.permanent = True
+            session["logged_in"] = True
+            return redirect(request.args.get("next") or url_for("index"))
+        error = "Username atau password salah."
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login_page"))
 
 
 # ─── Camera Manager ────────────────────────────────────────────────────────────
@@ -120,7 +189,6 @@ def _load_cameras() -> None:
     try:
         entries = json.loads(CAMERAS_FILE.read_text())
         for e in entries:
-            # Backward compat: format lama memakai line_pos/line_dir
             if "line_p1" in e and "line_p2" in e:
                 p1 = tuple(e["line_p1"])
                 p2 = tuple(e["line_p2"])
@@ -140,16 +208,19 @@ def _load_cameras() -> None:
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html")
 
 
 @app.route("/cameras", methods=["GET"])
+@login_required
 def list_cameras():
     return jsonify(mgr.list_all())
 
 
 @app.route("/cameras", methods=["POST"])
+@login_required
 def add_camera():
     d = request.get_json(silent=True) or {}
     url = d.get("url", "").strip()
@@ -168,6 +239,7 @@ def add_camera():
 
 
 @app.route("/cameras/<cam_id>", methods=["DELETE"])
+@login_required
 def remove_camera(cam_id):
     ok = mgr.remove(cam_id)
     if ok:
@@ -176,6 +248,7 @@ def remove_camera(cam_id):
 
 
 @app.route("/cameras/<cam_id>/feed")
+@login_required
 def camera_feed(cam_id):
     def generate():
         while True:
@@ -192,6 +265,7 @@ def camera_feed(cam_id):
 
 
 @app.route("/cameras/<cam_id>/stats")
+@login_required
 def camera_stats(cam_id):
     def generate():
         while True:
@@ -210,6 +284,7 @@ def camera_stats(cam_id):
 
 
 @app.route("/cameras/<cam_id>/config")
+@login_required
 def camera_config(cam_id):
     cam = mgr.get(cam_id)
     if cam is None:
@@ -220,6 +295,7 @@ def camera_config(cam_id):
 
 
 @app.route("/cameras/<cam_id>/reset", methods=["POST"])
+@login_required
 def camera_reset(cam_id):
     cam = mgr.get(cam_id)
     if cam is None:
@@ -229,6 +305,7 @@ def camera_reset(cam_id):
 
 
 @app.route("/cameras/<cam_id>/line", methods=["POST"])
+@login_required
 def camera_line(cam_id):
     cam = mgr.get(cam_id)
     if cam is None:
@@ -260,6 +337,7 @@ def _parse_screenshot_name(name: str) -> dict:
 
 
 @app.route("/screenshots")
+@login_required
 def list_screenshots():
     if not SCREENSHOTS_DIR.exists():
         return jsonify([])
@@ -267,24 +345,21 @@ def list_screenshots():
     result = []
     for f in files:
         meta = _parse_screenshot_name(f.name)
-        result.append({
-            "name": f.name,
-            "url": f"/screenshots/{f.name}",
-            "size": f.stat().st_size,
-            **meta,
-        })
+        result.append({"name": f.name, "url": f"/screenshots/{f.name}",
+                        "size": f.stat().st_size, **meta})
     return jsonify(result)
 
 
 @app.route("/screenshots/<path:filename>")
+@login_required
 def get_screenshot(filename):
     return send_from_directory(SCREENSHOTS_DIR.resolve(), filename)
 
 
 @app.route("/screenshots/<path:filename>", methods=["DELETE"])
+@login_required
 def delete_screenshot(filename):
     path = (SCREENSHOTS_DIR / filename).resolve()
-    # Pastikan file ada di dalam screenshots/ saja (cegah path traversal)
     if path.parent.resolve() != SCREENSHOTS_DIR.resolve():
         return jsonify(error="forbidden"), 403
     if path.exists() and path.suffix == ".jpg":
@@ -298,20 +373,36 @@ def delete_screenshot(filename):
 def parse_args():
     parser = argparse.ArgumentParser(
         description="People Counter — Web Server Multi-Kamera\n"
-                    "Tambah/hapus kamera langsung dari browser.\n"
-                    "Kamera tersimpan otomatis di cameras.json.",
+                    "Kredensial: AUTH_USERNAME / AUTH_PASSWORD env var\n"
+                    "            (default: admin / admin)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--host", default="0.0.0.0",
                         help="Alamat listen (default: %(default)s)")
     parser.add_argument("--port", type=int, default=5000,
                         help="Port web server (default: %(default)s)")
+    parser.add_argument("--no-auth", action="store_true",
+                        help="Nonaktifkan autentikasi (hanya untuk pengembangan lokal)")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    _auth_enabled = not args.no_auth
+
     _load_cameras()
-    print(f"\n  Web server: http://localhost:{args.port}")
-    print(f"  Dari laptop: http://<ip-debian>:{args.port}\n")
+
+    username, password = _get_creds()
+    print(f"\n  Web server  : http://localhost:{args.port}")
+    print(f"  Dari laptop : http://<ip-debian>:{args.port}")
+    if _auth_enabled:
+        print(f"  Auth        : aktif  (user={username})")
+        if password == "admin":
+            print("  PERINGATAN  : Gunakan env var AUTH_PASSWORD untuk ganti password default!")
+        if not os.environ.get("SECRET_KEY"):
+            print("  PERINGATAN  : SECRET_KEY tidak diset — sesi hilang saat server restart.")
+    else:
+        print("  Auth        : nonaktif (--no-auth)")
+    print()
+
     app.run(host=args.host, port=args.port, threaded=True)
