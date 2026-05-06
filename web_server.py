@@ -11,11 +11,12 @@ import time
 import uuid
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 
 from people_counter import DEFAULT_LINE_DIR, DEFAULT_LINE_POS, DEFAULT_MODEL, PeopleCounter
 
-CAMERAS_FILE = Path("cameras.json")
+CAMERAS_FILE    = Path("cameras.json")
+SCREENSHOTS_DIR = Path("screenshots")
 app = Flask(__name__)
 
 
@@ -239,6 +240,57 @@ def camera_line(cam_id):
     mgr.update_line(cam_id, x1, y1, x2, y2)
     _save_cameras()
     return jsonify(ok=True)
+
+
+# ─── Screenshot routes ─────────────────────────────────────────────────────────
+
+def _parse_screenshot_name(name: str) -> dict:
+    """Parse {source}_{YYYYMMDD}_{HHMMSS}_{mmm}_{count}.jpg → metadata dict."""
+    stem = name[:-4]
+    parts = stem.rsplit("_", 4)
+    if len(parts) == 5:
+        source, date, time_s, _ms, count_s = parts
+        try:
+            from datetime import datetime as dt
+            ts = dt.strptime(f"{date}_{time_s}", "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+            return {"source": source, "ts": ts, "count": int(count_s)}
+        except ValueError:
+            pass
+    return {"source": name, "ts": "-", "count": 0}
+
+
+@app.route("/screenshots")
+def list_screenshots():
+    if not SCREENSHOTS_DIR.exists():
+        return jsonify([])
+    files = sorted(SCREENSHOTS_DIR.glob("*.jpg"), key=lambda f: f.stat().st_mtime, reverse=True)
+    result = []
+    for f in files:
+        meta = _parse_screenshot_name(f.name)
+        result.append({
+            "name": f.name,
+            "url": f"/screenshots/{f.name}",
+            "size": f.stat().st_size,
+            **meta,
+        })
+    return jsonify(result)
+
+
+@app.route("/screenshots/<path:filename>")
+def get_screenshot(filename):
+    return send_from_directory(SCREENSHOTS_DIR.resolve(), filename)
+
+
+@app.route("/screenshots/<path:filename>", methods=["DELETE"])
+def delete_screenshot(filename):
+    path = (SCREENSHOTS_DIR / filename).resolve()
+    # Pastikan file ada di dalam screenshots/ saja (cegah path traversal)
+    if path.parent.resolve() != SCREENSHOTS_DIR.resolve():
+        return jsonify(error="forbidden"), 403
+    if path.exists() and path.suffix == ".jpg":
+        path.unlink()
+        return jsonify(ok=True)
+    return jsonify(ok=False), 404
 
 
 # ─── CLI ───────────────────────────────────────────────────────────────────────
