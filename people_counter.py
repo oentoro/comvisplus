@@ -7,6 +7,7 @@ import argparse
 import csv
 import os
 import queue
+import re
 import threading
 import time
 from collections import defaultdict
@@ -96,6 +97,7 @@ class PeopleCounter:
         output: str | None = None,
         show: bool = True,
         save_log: bool = True,
+        save_screenshots: bool = True,
         reconnect_delay: int = 5,
         max_reconnects: int = 0,
         inference_size: int = 320,
@@ -107,9 +109,13 @@ class PeopleCounter:
         self.output_path = output
         self.show = show
         self.save_log = save_log
+        self.save_screenshots = save_screenshots
         self.reconnect_delay = reconnect_delay
         self.max_reconnects = max_reconnects  # 0 = reconnect selamanya
         self.inference_size = inference_size  # ukuran input model (320 lebih cepat dari 640)
+
+        self._screenshot_dir = Path("screenshots")
+        self._screenshot_queue: list[int] = []  # count values yang menunggu screenshot
 
         # State tracking
         self.track_history: dict[int, list[tuple[int, int]]] = defaultdict(list)
@@ -201,6 +207,18 @@ class PeopleCounter:
         self.last_side.clear()
         ts = datetime.now().strftime("%H:%M:%S")
         print(f"[{ts}] Hitungan direset.", flush=True)
+
+    # ─── Screenshot ────────────────────────────────────────────────────────
+    def _source_stem(self) -> str:
+        part = str(self.source).rstrip("/").split("/")[-1].split("?")[0]
+        return re.sub(r"[^\w-]", "_", part) or "cam"
+
+    def _save_screenshot(self, frame: "np.ndarray", count: int) -> None:
+        self._screenshot_dir.mkdir(exist_ok=True)
+        ts  = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]  # YYYYMMDD_HHMMSS_mmm
+        out = self._screenshot_dir / f"{self._source_stem()}_{ts}_{count:04d}.jpg"
+        cv2.imwrite(str(out), frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        print(f"[Screenshot] {out}", flush=True)
 
     # ─── Mouse callback untuk drag garis ──────────────────────────────────────
     def _mouse_callback(self, event, x: int, y: int, flags, param) -> None:
@@ -362,6 +380,9 @@ class PeopleCounter:
 
                 ts = datetime.now().strftime("%H:%M:%S")
                 print(f"[{ts}] Orang #{self.total_count} terdeteksi (ID:{tid}) → {direction_label}")
+
+                if self.save_screenshots:
+                    self._screenshot_queue.append(self.total_count)
 
                 if self.save_log:
                     self.log_rows.append({
@@ -531,6 +552,12 @@ class PeopleCounter:
             fps_text = f"FPS: {fps_display:.1f}  Frame: {progress}"
             self._draw_overlay(frame, fps_text)
 
+            # Simpan screenshot setelah frame selesai di-render (garis + bbox sudah tergambar)
+            if self._screenshot_queue:
+                for count in self._screenshot_queue:
+                    self._save_screenshot(frame, count)
+                self._screenshot_queue.clear()
+
             _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
             with self._frame_lock:
                 self._latest_frame = jpeg.tobytes()
@@ -620,6 +647,11 @@ def parse_args():
         help="Jangan simpan log CSV",
     )
     parser.add_argument(
+        "--no-screenshots",
+        action="store_true",
+        help="Jangan simpan screenshot saat ada orang lewat",
+    )
+    parser.add_argument(
         "--reconnect-delay",
         type=int,
         default=5,
@@ -673,6 +705,7 @@ if __name__ == "__main__":
         output=args.output,
         show=not args.no_show,
         save_log=not args.no_log,
+        save_screenshots=not args.no_screenshots,
         reconnect_delay=args.reconnect_delay,
         max_reconnects=args.max_reconnects,
         inference_size=args.imgsz,

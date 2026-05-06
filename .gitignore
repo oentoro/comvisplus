@@ -5,4 +5,5 @@ __pycache__/
 cameras.json
 *_log.csv
 *.mp4
+screenshots/
 .DS_Store
