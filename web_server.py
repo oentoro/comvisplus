@@ -34,6 +34,7 @@ class CameraManager:
         line_dir: str = DEFAULT_LINE_DIR,
         reconnect_delay: int = 5,
         max_reconnects: int = 0,
+        inference_size: int = 320,
     ) -> str:
         cam_id = uuid.uuid4().hex[:8]
         counter = PeopleCounter(
@@ -44,6 +45,7 @@ class CameraManager:
             save_log=True,
             reconnect_delay=reconnect_delay,
             max_reconnects=max_reconnects,
+            inference_size=inference_size,
         )
         thread = threading.Thread(target=counter.run, daemon=True, name=f"cam-{cam_id}")
         with self._lock:

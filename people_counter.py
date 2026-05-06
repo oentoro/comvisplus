@@ -6,6 +6,7 @@ Menggunakan YOLOv8 untuk deteksi dan ByteTrack untuk tracking
 import argparse
 import csv
 import os
+import queue
 import threading
 import time
 from collections import defaultdict
@@ -79,6 +80,7 @@ class PeopleCounter:
         save_log: bool = True,
         reconnect_delay: int = 5,
         max_reconnects: int = 0,
+        inference_size: int = 320,
     ):
         self.source = source
         self.model = YOLO(model_path)
@@ -89,6 +91,7 @@ class PeopleCounter:
         self.save_log = save_log
         self.reconnect_delay = reconnect_delay
         self.max_reconnects = max_reconnects  # 0 = reconnect selamanya
+        self.inference_size = inference_size  # ukuran input model (320 lebih cepat dari 640)
 
         # State tracking
         self.track_history: dict[int, list[tuple[int, int]]] = defaultdict(list)
@@ -112,6 +115,7 @@ class PeopleCounter:
         self._frame_lock = threading.Lock()
         self.running = False
         self._stop_event = threading.Event()
+        self._reconnecting = False
 
     def _is_rtsp(self) -> bool:
         return isinstance(self.source, str) and self.source.lower().startswith("rtsp://")
@@ -259,6 +263,7 @@ class PeopleCounter:
             classes=[PERSON_CLASS_ID],
             conf=CONF_THRESHOLD,
             tracker="bytetrack.yaml",
+            imgsz=self.inference_size,
             verbose=False,
         )
 
@@ -363,7 +368,55 @@ class PeopleCounter:
         self.last_side.clear()
         self.crossed_ids.clear()
 
-    # ─── Loop utama ────────────────────────────────────────────────────────────
+    # ─── Thread capture (terpisah dari inferensi) ──────────────────────────────
+    def _capture_loop(self, cap: cv2.VideoCapture, frame_q: queue.Queue) -> None:
+        """Baca frame terus-menerus dan masukkan ke queue.
+        Inferensi yang lambat akan otomatis men-drop frame lama (queue size=1)."""
+        consecutive_fails = 0
+        reconnect_attempt = 0
+        MAX_FAILS = 5
+
+        while self.running:
+            ret, frame = cap.read()
+
+            if not ret:
+                consecutive_fails += 1
+                if not self._is_rtsp():
+                    break
+                if consecutive_fails < MAX_FAILS:
+                    continue
+
+                ts = datetime.now().strftime("%H:%M:%S")
+                print(f"[{ts}] Koneksi RTSP terputus.", flush=True)
+                cap.release()
+                self._reconnecting = True
+
+                reconnect_attempt += 1
+                if self.max_reconnects > 0 and reconnect_attempt > self.max_reconnects:
+                    print("Batas maksimum reconnect tercapai. Berhenti.")
+                    break
+
+                new_cap = self._reconnect(reconnect_attempt)
+                if new_cap is None:
+                    continue
+
+                cap = new_cap
+                self._reset_tracker_state()
+                consecutive_fails = 0
+                reconnect_attempt = 0
+                self._reconnecting = False
+            else:
+                consecutive_fails = 0
+                reconnect_attempt = 0
+                try:
+                    frame_q.put_nowait(frame)  # drop frame lama jika inferensi ketinggalan
+                except queue.Full:
+                    pass
+
+        cap.release()
+        self.running = False  # sinyal ke inference loop untuk berhenti
+
+    # ─── Loop utama (inferensi) ────────────────────────────────────────────────
     def run(self) -> None:
         self.running = True
         cap = self._open_source()
@@ -376,73 +429,56 @@ class PeopleCounter:
 
         print(f"\n{'='*50}")
         print(f"  People Counter - CCTV AI")
-        print(f"  Sumber  : {self.source}")
-        print(f"  Resolusi: {w}x{h}")
-        print(f"  Garis   : {self.line_dir} @ {self.line_pos:.0%}")
+        print(f"  Sumber     : {self.source}")
+        print(f"  Resolusi   : {w}x{h}")
+        print(f"  Garis      : {self.line_dir} @ {self.line_pos:.0%}")
+        print(f"  Inf. size  : {self.inference_size}px")
         print(f"  Tekan Q untuk berhenti | R untuk reset hitungan")
         print(f"  Drag garis kuning untuk memindahkan posisi hitung")
         print(f"{'='*50}\n")
 
+        # Jalankan capture di thread terpisah agar tidak blocking inferensi
+        frame_q: queue.Queue = queue.Queue(maxsize=1)
+        cap_thread = threading.Thread(
+            target=self._capture_loop, args=(cap, frame_q),
+            daemon=True, name="capture",
+        )
+        cap_thread.start()
+
         frame_count = 0
         fps_display = 0.0
         t_prev = time.perf_counter()
-        consecutive_fails = 0
-        reconnect_attempt = 0
-        MAX_CONSECUTIVE_FAILS = 5  # frame gagal berturut-turut sebelum reconnect
+        win = "People Counter  |  Q: keluar  |  R: reset"
 
         while self.running:
-            ret, frame = cap.read()
-
-            # ── Tangani frame gagal (putus koneksi) ──────────────────────────
-            if not ret:
-                consecutive_fails += 1
-
-                # Untuk file video biasa, EOF berarti selesai
-                if not self._is_rtsp():
-                    break
-
-                if consecutive_fails < MAX_CONSECUTIVE_FAILS:
-                    continue
-
-                # RTSP putus — coba reconnect
-                ts = datetime.now().strftime("%H:%M:%S")
-                print(f"[{ts}] Koneksi RTSP terputus.", flush=True)
-                cap.release()
-
-                reconnect_attempt += 1
-                if self.max_reconnects > 0 and reconnect_attempt > self.max_reconnects:
-                    print("Batas maksimum reconnect tercapai. Berhenti.")
-                    break
-
-                # Tampilkan layar "Reconnecting..." selama menunggu
+            # ── Tampilkan layar reconnecting ──────────────────────────────────
+            if self._reconnecting:
                 if self.show and w > 0 and h > 0:
                     blank = np.zeros((h, w, 3), dtype=np.uint8)
-                    msg = f"Reconnecting... (percobaan #{reconnect_attempt})"
-                    cv2.putText(blank, msg, (w // 2 - 220, h // 2),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 200, 255), 2)
-                    cv2.imshow("People Counter (tekan Q untuk keluar)", blank)
-                    cv2.waitKey(1)
-
-                new_cap = self._reconnect(reconnect_attempt)
-                if new_cap is None:
-                    continue  # akan coba lagi di iterasi berikutnya
-
-                cap = new_cap
-                self._reset_tracker_state()
-                consecutive_fails = 0
-                t_prev = time.perf_counter()
+                    cv2.putText(blank, "Reconnecting...", (w // 2 - 160, h // 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 255), 2)
+                    cv2.imshow(win, blank)
+                    if cv2.waitKey(100) & 0xFF == ord("q"):
+                        self.running = False
+                else:
+                    time.sleep(0.1)
                 continue
 
-            # ── Frame valid ──────────────────────────────────────────────────
-            consecutive_fails = 0
-            reconnect_attempt = 0  # reset counter setelah berhasil
+            # ── Ambil frame terbaru dari queue ────────────────────────────────
+            try:
+                frame = frame_q.get(timeout=0.5)
+            except queue.Empty:
+                if self.show:
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        self.running = False
+                continue
 
+            # ── Inferensi + render ────────────────────────────────────────────
             frame_count += 1
             frame = self._process_frame(frame)
             line_state = "drag" if self._dragging else ("hover" if self._hover else "normal")
             self.counting_line.draw(frame, state=line_state)
 
-            # Hitung FPS setiap 15 frame
             if frame_count % 15 == 0:
                 t_now = time.perf_counter()
                 fps_display = 15 / (t_now - t_prev)
@@ -452,7 +488,6 @@ class PeopleCounter:
             fps_text = f"FPS: {fps_display:.1f}  Frame: {progress}"
             self._draw_overlay(frame, fps_text)
 
-            # Simpan frame untuk web streaming
             _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
             with self._frame_lock:
                 self._latest_frame = jpeg.tobytes()
@@ -461,19 +496,16 @@ class PeopleCounter:
                 writer.write(frame)
 
             if self.show:
-                win = "People Counter  |  Q: keluar  |  R: reset"
                 cv2.imshow(win, frame)
-                # Daftarkan callback sekali saat window sudah ada
                 if frame_count == 1:
                     cv2.setMouseCallback(win, self._mouse_callback)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
-                    break
-                if key == ord("r"):
+                    self.running = False
+                elif key == ord("r"):
                     self._reset_counts()
 
-        # Cleanup
-        cap.release()
+        cap_thread.join(timeout=5)
         if writer:
             writer.release()
             print(f"Video output disimpan: {self.output_path}")
@@ -485,11 +517,11 @@ class PeopleCounter:
         duration = datetime.now() - self.start_time
         print(f"\n{'='*50}")
         print(f"  HASIL AKHIR")
-        print(f"  Total orang lewat  : {self.total_count}")
-        print(f"  Kanan / Bawah      : {self.count_right}")
-        print(f"  Kiri  / Atas       : {self.count_left}")
-        print(f"  Durasi proses      : {str(duration).split('.')[0]}")
-        print(f"  Total frame        : {frame_count}")
+        print(f"  Total orang lewat   : {self.total_count}")
+        print(f"  Kanan / Bawah       : {self.count_right}")
+        print(f"  Kiri  / Atas        : {self.count_left}")
+        print(f"  Durasi proses       : {str(duration).split('.')[0]}")
+        print(f"  Frame diproses      : {frame_count}")
         print(f"{'='*50}\n")
         self.running = False
 
@@ -550,6 +582,14 @@ def parse_args():
         metavar="N",
         help="Batas percobaan reconnect, 0 = reconnect selamanya (default: %(default)s)",
     )
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=320,
+        metavar="PX",
+        help="Ukuran input inferensi YOLOv8 (default: %(default)s). "
+             "Lebih kecil=lebih cepat, lebih besar=lebih akurat. Pilihan: 160/320/480/640",
+    )
     return parser.parse_args()
 
 
@@ -565,5 +605,6 @@ if __name__ == "__main__":
         save_log=not args.no_log,
         reconnect_delay=args.reconnect_delay,
         max_reconnects=args.max_reconnects,
+        inference_size=args.imgsz,
     )
     counter.run()
