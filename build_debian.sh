@@ -8,6 +8,23 @@ CPP_DIR="${ROOT_DIR}/cpp"
 OPENVINO_DEFAULT="/opt/intel/openvino_2025.4.0"
 OPENVINO_DIR_CMAKE_DEFAULT="${OPENVINO_DEFAULT}/runtime/cmake"
 
+source_openvino_env() {
+  local script_path="$1"
+  local restore_nounset=0
+
+  if [[ $- == *u* ]]; then
+    restore_nounset=1
+    set +u
+  fi
+
+  # shellcheck disable=SC1090
+  source "${script_path}"
+
+  if [[ "${restore_nounset}" -eq 1 ]]; then
+    set -u
+  fi
+}
+
 if [[ ! -d "${CPP_DIR}" ]]; then
   echo "[error] Folder cpp/ tidak ditemukan."
   exit 1
@@ -32,8 +49,7 @@ if ! pkg-config --exists opencv4; then
 fi
 
 if [[ -f "${OPENVINO_DEFAULT}/setupvars.sh" ]]; then
-  # shellcheck disable=SC1091
-  source "${OPENVINO_DEFAULT}/setupvars.sh"
+  source_openvino_env "${OPENVINO_DEFAULT}/setupvars.sh"
   echo "[info] OpenVINO environment loaded from ${OPENVINO_DEFAULT}"
 else
   echo "[warn] ${OPENVINO_DEFAULT}/setupvars.sh tidak ditemukan."
@@ -61,7 +77,10 @@ cat <<EOF
 
 Jalankan dengan contoh:
 
-  export RTSP_URL='rtsp://user:password@camera/stream'
+  ./run_debian.sh
+
+Atau jalankan binary langsung:
+
   ${BUILD_DIR}/comvisplus_native --host 0.0.0.0 --port 5000 --model ${ROOT_DIR}/yolov8n_openvino_model
 
 Kalau model OpenVINO kamu berupa file XML langsung:

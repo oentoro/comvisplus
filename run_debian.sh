@@ -10,13 +10,29 @@ DEFAULT_MODEL_DIR="${ROOT_DIR}/yolov8n_openvino_model"
 DEFAULT_HOST="0.0.0.0"
 DEFAULT_PORT="5000"
 
+source_openvino_env() {
+  local script_path="$1"
+  local restore_nounset=0
+
+  if [[ $- == *u* ]]; then
+    restore_nounset=1
+    set +u
+  fi
+
+  # shellcheck disable=SC1090
+  source "${script_path}"
+
+  if [[ "${restore_nounset}" -eq 1 ]]; then
+    set -u
+  fi
+}
+
 MODEL_PATH="${MODEL_PATH:-${DEFAULT_MODEL_DIR}}"
 HOST="${HOST:-${DEFAULT_HOST}}"
 PORT="${PORT:-${DEFAULT_PORT}}"
 
 if [[ -f "${OPENVINO_DEFAULT}/setupvars.sh" ]]; then
-  # shellcheck disable=SC1091
-  source "${OPENVINO_DEFAULT}/setupvars.sh"
+  source_openvino_env "${OPENVINO_DEFAULT}/setupvars.sh"
   echo "[info] OpenVINO environment loaded from ${OPENVINO_DEFAULT}"
 else
   echo "[warn] ${OPENVINO_DEFAULT}/setupvars.sh tidak ditemukan."
