@@ -18,14 +18,26 @@ namespace comvisplus {
 
 namespace {
 
+constexpr float kHighConfidenceThreshold = 0.5F;
+constexpr float kLowConfidenceThreshold = 0.15F;
+constexpr float kTrackIouThreshold = 0.3F;
+constexpr int kMaxLostFrames = 20;
+
+enum class TrackState {
+    Tracked,
+    Lost,
+};
+
 struct Track {
     int id = 0;
     cv::Point center;
     cv::Rect box;
+    float confidence = 0.0F;
     int frames_seen = 0;
     int missed_frames = 0;
     bool counted = false;
     int last_side = 0;
+    TrackState state = TrackState::Tracked;
 };
 
 cv::Point to_point(const LineConfig& line, int width, int height, bool first) {
@@ -148,10 +160,108 @@ void draw_detection(cv::Mat& frame, const Detection& detection, int track_id) {
     );
 }
 
-float center_distance(const cv::Point& lhs, const cv::Point& rhs) {
-    const float dx = static_cast<float>(lhs.x - rhs.x);
-    const float dy = static_cast<float>(lhs.y - rhs.y);
-    return std::sqrt((dx * dx) + (dy * dy));
+cv::Rect detection_rect(const Detection& detection) {
+    const int x1 = static_cast<int>(std::round(detection.x1));
+    const int y1 = static_cast<int>(std::round(detection.y1));
+    const int x2 = static_cast<int>(std::round(detection.x2));
+    const int y2 = static_cast<int>(std::round(detection.y2));
+    return cv::Rect(cv::Point(x1, y1), cv::Point(x2, y2));
+}
+
+cv::Point detection_center(const Detection& detection) {
+    return cv::Point(
+        static_cast<int>(std::round((detection.x1 + detection.x2) * 0.5F)),
+        static_cast<int>(std::round((detection.y1 + detection.y2) * 0.5F))
+    );
+}
+
+float rect_iou(const cv::Rect& lhs, const cv::Rect& rhs) {
+    const cv::Rect inter = lhs & rhs;
+    const float inter_area = static_cast<float>(inter.area());
+    const float union_area = static_cast<float>(lhs.area() + rhs.area() - inter.area());
+    if (union_area <= 0.0F) {
+        return 0.0F;
+    }
+    return inter_area / union_area;
+}
+
+void apply_detection_to_track(
+    Track& track,
+    const Detection& detection,
+    const LineConfig& line,
+    CounterStats& stats,
+    int frame_width,
+    int frame_height
+) {
+    const cv::Point center = detection_center(detection);
+    track.center = center;
+    track.box = detection_rect(detection);
+    track.confidence = detection.confidence;
+    track.frames_seen += 1;
+    track.missed_frames = 0;
+    track.state = TrackState::Tracked;
+
+    const int new_side = point_side(line, center, frame_width, frame_height);
+    if (track.frames_seen >= 3 && track.last_side != 0 && new_side != track.last_side && !track.counted) {
+        track.counted = true;
+        stats.total += 1;
+        if (new_side == 1) {
+            stats.right += 1;
+        } else {
+            stats.left += 1;
+        }
+    }
+    track.last_side = new_side;
+}
+
+void match_tracks_to_detections(
+    std::vector<Track>& tracks,
+    const std::vector<Detection>& detections,
+    std::vector<bool>& matched_tracks,
+    std::vector<bool>& matched_detections,
+    const LineConfig& line,
+    CounterStats& stats,
+    int frame_width,
+    int frame_height,
+    float min_iou
+) {
+    while (true) {
+        float best_iou = min_iou;
+        int best_track = -1;
+        int best_detection = -1;
+
+        for (std::size_t ti = 0; ti < tracks.size(); ++ti) {
+            if (matched_tracks[ti]) {
+                continue;
+            }
+            for (std::size_t di = 0; di < detections.size(); ++di) {
+                if (matched_detections[di]) {
+                    continue;
+                }
+                const float iou = rect_iou(tracks[ti].box, detection_rect(detections[di]));
+                if (iou > best_iou) {
+                    best_iou = iou;
+                    best_track = static_cast<int>(ti);
+                    best_detection = static_cast<int>(di);
+                }
+            }
+        }
+
+        if (best_track < 0 || best_detection < 0) {
+            break;
+        }
+
+        matched_tracks[static_cast<std::size_t>(best_track)] = true;
+        matched_detections[static_cast<std::size_t>(best_detection)] = true;
+        apply_detection_to_track(
+            tracks[static_cast<std::size_t>(best_track)],
+            detections[static_cast<std::size_t>(best_detection)],
+            line,
+            stats,
+            frame_width,
+            frame_height
+        );
+    }
 }
 
 void update_tracks(
@@ -163,86 +273,75 @@ void update_tracks(
     int frame_height,
     int& next_track_id
 ) {
-    std::vector<bool> matched(detections.size(), false);
+    std::vector<Detection> high_confidence;
+    std::vector<Detection> low_confidence;
+    high_confidence.reserve(detections.size());
+    low_confidence.reserve(detections.size());
 
-    for (auto& track : tracks) {
-        float best_distance = 90.0F;
-        int best_index = -1;
-
-        for (std::size_t i = 0; i < detections.size(); ++i) {
-            if (matched[i]) {
-                continue;
-            }
-            const auto& detection = detections[i];
-            const cv::Point center(
-                static_cast<int>((detection.x1 + detection.x2) * 0.5F),
-                static_cast<int>((detection.y1 + detection.y2) * 0.5F)
-            );
-            const float distance = center_distance(track.center, center);
-            if (distance < best_distance) {
-                best_distance = distance;
-                best_index = static_cast<int>(i);
-            }
+    for (const auto& detection : detections) {
+        if (detection.confidence >= kHighConfidenceThreshold) {
+            high_confidence.push_back(detection);
+        } else if (detection.confidence >= kLowConfidenceThreshold) {
+            low_confidence.push_back(detection);
         }
+    }
 
-        if (best_index >= 0) {
-            const auto& detection = detections[static_cast<std::size_t>(best_index)];
-            const cv::Point center(
-                static_cast<int>((detection.x1 + detection.x2) * 0.5F),
-                static_cast<int>((detection.y1 + detection.y2) * 0.5F)
-            );
-            track.center = center;
-            track.box = cv::Rect(
-                cv::Point(static_cast<int>(detection.x1), static_cast<int>(detection.y1)),
-                cv::Point(static_cast<int>(detection.x2), static_cast<int>(detection.y2))
-            );
-            track.frames_seen += 1;
-            track.missed_frames = 0;
+    std::vector<bool> matched_tracks(tracks.size(), false);
+    std::vector<bool> matched_high(high_confidence.size(), false);
+    match_tracks_to_detections(
+        tracks,
+        high_confidence,
+        matched_tracks,
+        matched_high,
+        line,
+        stats,
+        frame_width,
+        frame_height,
+        kTrackIouThreshold
+    );
 
-            const int new_side = point_side(line, center, frame_width, frame_height);
-            if (track.frames_seen >= 3 && track.last_side != 0 && new_side != track.last_side && !track.counted) {
-                track.counted = true;
-                stats.total += 1;
-                if (new_side == 1) {
-                    stats.right += 1;
-                } else {
-                    stats.left += 1;
-                }
-            }
-            track.last_side = new_side;
-            matched[static_cast<std::size_t>(best_index)] = true;
-        } else {
-            track.missed_frames += 1;
+    std::vector<bool> matched_low(low_confidence.size(), false);
+    match_tracks_to_detections(
+        tracks,
+        low_confidence,
+        matched_tracks,
+        matched_low,
+        line,
+        stats,
+        frame_width,
+        frame_height,
+        kTrackIouThreshold * 0.8F
+    );
+
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        if (matched_tracks[i]) {
+            continue;
         }
+        tracks[i].missed_frames += 1;
+        tracks[i].state = TrackState::Lost;
     }
 
     tracks.erase(
         std::remove_if(
             tracks.begin(),
             tracks.end(),
-            [](const Track& track) { return track.missed_frames > 12; }
+            [](const Track& track) { return track.missed_frames > kMaxLostFrames; }
         ),
         tracks.end()
     );
 
-    for (std::size_t i = 0; i < detections.size(); ++i) {
-        if (matched[i]) {
+    for (std::size_t i = 0; i < high_confidence.size(); ++i) {
+        if (matched_high[i]) {
             continue;
         }
-        const auto& detection = detections[i];
-        const cv::Point center(
-            static_cast<int>((detection.x1 + detection.x2) * 0.5F),
-            static_cast<int>((detection.y1 + detection.y2) * 0.5F)
-        );
+        const auto& detection = high_confidence[i];
         Track track;
         track.id = next_track_id++;
-        track.center = center;
-        track.box = cv::Rect(
-            cv::Point(static_cast<int>(detection.x1), static_cast<int>(detection.y1)),
-            cv::Point(static_cast<int>(detection.x2), static_cast<int>(detection.y2))
-        );
+        track.center = detection_center(detection);
+        track.box = detection_rect(detection);
+        track.confidence = detection.confidence;
         track.frames_seen = 1;
-        track.last_side = point_side(line, center, frame_width, frame_height);
+        track.last_side = point_side(line, track.center, frame_width, frame_height);
         tracks.push_back(track);
     }
 }
@@ -334,19 +433,18 @@ void CounterEngine::run(const CameraRuntimePtr& runtime) const {
                     );
                 }
 
-                for (const auto& detection : detections) {
-                    int track_id = 0;
-                    const cv::Point center(
-                        static_cast<int>((detection.x1 + detection.x2) * 0.5F),
-                        static_cast<int>((detection.y1 + detection.y2) * 0.5F)
-                    );
-                    for (const auto& track : tracks) {
-                        if (center_distance(track.center, center) < 5.0F) {
-                            track_id = track.id;
-                            break;
-                        }
+                for (const auto& track : tracks) {
+                    if (track.state != TrackState::Tracked) {
+                        continue;
                     }
-                    draw_detection(frame, detection, track_id);
+                    Detection detection;
+                    detection.x1 = static_cast<float>(track.box.x);
+                    detection.y1 = static_cast<float>(track.box.y);
+                    detection.x2 = static_cast<float>(track.box.x + track.box.width);
+                    detection.y2 = static_cast<float>(track.box.y + track.box.height);
+                    detection.confidence = track.confidence;
+                    detection.class_id = 0;
+                    draw_detection(frame, detection, track.id);
                 }
 
                 draw_overlay(*runtime, frame);
