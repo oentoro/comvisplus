@@ -22,7 +22,21 @@ find_package(Threads REQUIRED)
 target_link_libraries(comvisplus_native PRIVATE Threads::Threads)
 
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio)
-if(OpenCV_LIBRARIES)
+if(TARGET opencv_core)
+    target_link_libraries(comvisplus_native PRIVATE
+        opencv_core
+        opencv_imgproc
+        opencv_imgcodecs
+        opencv_videoio
+    )
+elseif(TARGET OpenCV::opencv_core)
+    target_link_libraries(comvisplus_native PRIVATE
+        OpenCV::opencv_core
+        OpenCV::opencv_imgproc
+        OpenCV::opencv_imgcodecs
+        OpenCV::opencv_videoio
+    )
+elseif(OpenCV_LIBRARIES)
     target_link_libraries(comvisplus_native PRIVATE ${OpenCV_LIBRARIES})
 elseif(OpenCV_LIBS)
     target_link_libraries(comvisplus_native PRIVATE ${OpenCV_LIBS})
