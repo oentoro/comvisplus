@@ -1,9 +1,9 @@
 #include "camera_manager.hpp"
 
 #include <chrono>
+#include <cctype>
 #include <fstream>
 #include <iostream>
-#include <opencv2/core/persistence.hpp>
 #include <sstream>
 
 namespace comvisplus {
@@ -17,32 +17,281 @@ std::string make_camera_id() {
     return oss.str();
 }
 
-LineConfig parse_line(const cv::FileNode& node) {
-    LineConfig line;
-    const auto line_p1 = node["line_p1"];
-    const auto line_p2 = node["line_p2"];
-    if (!line_p1.empty() && !line_p2.empty() && line_p1.isSeq() && line_p2.isSeq()) {
-        line.x1 = static_cast<float>(line_p1[0].real());
-        line.y1 = static_cast<float>(line_p1[1].real());
-        line.x2 = static_cast<float>(line_p2[0].real());
-        line.y2 = static_cast<float>(line_p2[1].real());
-        return line;
+std::string escape_json(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char ch : value) {
+        switch (ch) {
+            case '\\':
+                escaped += "\\\\";
+                break;
+            case '"':
+                escaped += "\\\"";
+                break;
+            case '\n':
+                escaped += "\\n";
+                break;
+            case '\r':
+                escaped += "\\r";
+                break;
+            case '\t':
+                escaped += "\\t";
+                break;
+            default:
+                escaped += ch;
+                break;
+        }
+    }
+    return escaped;
+}
+
+void skip_ws(const std::string& text, std::size_t& pos) {
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos])) != 0) {
+        pos += 1;
+    }
+}
+
+bool consume_char(const std::string& text, std::size_t& pos, const char expected) {
+    skip_ws(text, pos);
+    if (pos >= text.size() || text[pos] != expected) {
+        return false;
+    }
+    pos += 1;
+    return true;
+}
+
+bool parse_string_token(const std::string& text, std::size_t& pos, std::string& out) {
+    skip_ws(text, pos);
+    if (pos >= text.size() || text[pos] != '"') {
+        return false;
     }
 
-    const std::string line_dir = static_cast<std::string>(node["line_dir"]);
-    const float line_pos = node["line_pos"].empty() ? 0.5F : static_cast<float>(node["line_pos"].real());
-    if (line_dir == "horizontal") {
-        line.x1 = 0.0F;
-        line.y1 = line_pos;
-        line.x2 = 1.0F;
-        line.y2 = line_pos;
-    } else {
-        line.x1 = line_pos;
-        line.y1 = 0.0F;
-        line.x2 = line_pos;
-        line.y2 = 1.0F;
+    pos += 1;
+    out.clear();
+    while (pos < text.size()) {
+        const char ch = text[pos++];
+        if (ch == '"') {
+            return true;
+        }
+        if (ch == '\\' && pos < text.size()) {
+            const char escaped = text[pos++];
+            switch (escaped) {
+                case '"':
+                case '\\':
+                case '/':
+                    out += escaped;
+                    break;
+                case 'n':
+                    out += '\n';
+                    break;
+                case 'r':
+                    out += '\r';
+                    break;
+                case 't':
+                    out += '\t';
+                    break;
+                default:
+                    out += escaped;
+                    break;
+            }
+            continue;
+        }
+        out += ch;
     }
-    return line;
+    return false;
+}
+
+bool parse_number_token(const std::string& text, std::size_t& pos, double& out) {
+    skip_ws(text, pos);
+    const std::size_t start = pos;
+    if (pos < text.size() && (text[pos] == '-' || text[pos] == '+')) {
+        pos += 1;
+    }
+    while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos])) != 0) {
+        pos += 1;
+    }
+    if (pos < text.size() && text[pos] == '.') {
+        pos += 1;
+        while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos])) != 0) {
+            pos += 1;
+        }
+    }
+    if (pos < text.size() && (text[pos] == 'e' || text[pos] == 'E')) {
+        pos += 1;
+        if (pos < text.size() && (text[pos] == '-' || text[pos] == '+')) {
+            pos += 1;
+        }
+        while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos])) != 0) {
+            pos += 1;
+        }
+    }
+    if (start == pos) {
+        return false;
+    }
+
+    try {
+        out = std::stod(text.substr(start, pos - start));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parse_float_array2(const std::string& text, std::size_t& pos, float& a, float& b) {
+    if (!consume_char(text, pos, '[')) {
+        return false;
+    }
+
+    double first = 0.0;
+    double second = 0.0;
+    if (!parse_number_token(text, pos, first)) {
+        return false;
+    }
+    if (!consume_char(text, pos, ',')) {
+        return false;
+    }
+    if (!parse_number_token(text, pos, second)) {
+        return false;
+    }
+    if (!consume_char(text, pos, ']')) {
+        return false;
+    }
+
+    a = static_cast<float>(first);
+    b = static_cast<float>(second);
+    return true;
+}
+
+std::string read_file_text(const std::string& path) {
+    std::ifstream input(path);
+    if (!input.good()) {
+        return {};
+    }
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+}
+
+bool parse_camera_object(const std::string& text, std::size_t& pos, CameraConfig& config) {
+    if (!consume_char(text, pos, '{')) {
+        return false;
+    }
+
+    bool first = true;
+    std::string line_dir;
+    float line_pos = 0.5F;
+    bool has_line_p1 = false;
+    bool has_line_p2 = false;
+
+    while (true) {
+        skip_ws(text, pos);
+        if (pos < text.size() && text[pos] == '}') {
+            pos += 1;
+            break;
+        }
+        if (!first) {
+            if (!consume_char(text, pos, ',')) {
+                return false;
+            }
+        }
+        first = false;
+
+        std::string key;
+        if (!parse_string_token(text, pos, key) || !consume_char(text, pos, ':')) {
+            return false;
+        }
+
+        if (key == "url") {
+            if (!parse_string_token(text, pos, config.rtsp_url)) {
+                return false;
+            }
+        } else if (key == "label") {
+            if (!parse_string_token(text, pos, config.label)) {
+                return false;
+            }
+        } else if (key == "frame_skip") {
+            double number = 0.0;
+            if (!parse_number_token(text, pos, number)) {
+                return false;
+            }
+            config.frame_skip = static_cast<int>(number);
+        } else if (key == "inference_size") {
+            double number = 0.0;
+            if (!parse_number_token(text, pos, number)) {
+                return false;
+            }
+            config.inference_size = static_cast<int>(number);
+        } else if (key == "line_pos") {
+            double number = 0.0;
+            if (!parse_number_token(text, pos, number)) {
+                return false;
+            }
+            line_pos = static_cast<float>(number);
+        } else if (key == "line_dir") {
+            if (!parse_string_token(text, pos, line_dir)) {
+                return false;
+            }
+        } else if (key == "line_p1") {
+            if (!parse_float_array2(text, pos, config.line.x1, config.line.y1)) {
+                return false;
+            }
+            has_line_p1 = true;
+        } else if (key == "line_p2") {
+            if (!parse_float_array2(text, pos, config.line.x2, config.line.y2)) {
+                return false;
+            }
+            has_line_p2 = true;
+        } else {
+            return false;
+        }
+    }
+
+    if (!(has_line_p1 && has_line_p2)) {
+        if (line_dir == "horizontal") {
+            config.line = {0.0F, line_pos, 1.0F, line_pos};
+        } else {
+            config.line = {line_pos, 0.0F, line_pos, 1.0F};
+        }
+    }
+
+    if (config.frame_skip <= 0) {
+        config.frame_skip = 2;
+    }
+    if (config.inference_size <= 0) {
+        config.inference_size = 320;
+    }
+
+    return true;
+}
+
+bool parse_cameras_json(const std::string& text, std::vector<CameraConfig>& configs) {
+    std::size_t pos = 0;
+    if (!consume_char(text, pos, '[')) {
+        return false;
+    }
+
+    bool first = true;
+    while (true) {
+        skip_ws(text, pos);
+        if (pos < text.size() && text[pos] == ']') {
+            pos += 1;
+            break;
+        }
+        if (!first) {
+            if (!consume_char(text, pos, ',')) {
+                return false;
+            }
+        }
+        first = false;
+
+        CameraConfig config;
+        if (!parse_camera_object(text, pos, config)) {
+            return false;
+        }
+        configs.push_back(config);
+    }
+
+    return true;
 }
 
 void start_runtime_worker(const std::shared_ptr<CounterEngine>& engine, const CameraRuntimePtr& runtime) {
@@ -151,30 +400,18 @@ bool CameraManager::update_line(const std::string& camera_id, const LineConfig& 
 }
 
 bool CameraManager::load_from_disk() {
-    std::ifstream check(app_config_.cameras_file);
-    if (!check.good()) {
-        return false;
-    }
-    check.close();
-
-    cv::FileStorage storage(app_config_.cameras_file, cv::FileStorage::READ | cv::FileStorage::FORMAT_JSON);
-    if (!storage.isOpened()) {
+    const std::string text = read_file_text(app_config_.cameras_file);
+    if (text.empty()) {
         return false;
     }
 
-    const auto cameras = storage.root();
-    if (cameras.empty() || !cameras.isSeq()) {
+    std::vector<CameraConfig> configs;
+    if (!parse_cameras_json(text, configs)) {
         return false;
     }
 
     int loaded = 0;
-    for (const auto& node : cameras) {
-        CameraConfig config;
-        config.label = static_cast<std::string>(node["label"]);
-        config.rtsp_url = static_cast<std::string>(node["url"]);
-        config.frame_skip = node["frame_skip"].empty() ? 2 : static_cast<int>(node["frame_skip"]);
-        config.line = parse_line(node);
-
+    for (const auto& config : configs) {
         if (config.rtsp_url.empty()) {
             continue;
         }
@@ -187,27 +424,32 @@ bool CameraManager::load_from_disk() {
 }
 
 bool CameraManager::save_to_disk() const {
-    cv::FileStorage storage(app_config_.cameras_file, cv::FileStorage::WRITE | cv::FileStorage::FORMAT_JSON);
-    if (!storage.isOpened()) {
+    std::ofstream output(app_config_.cameras_file, std::ios::trunc);
+    if (!output.good()) {
         return false;
     }
 
-    storage.startWriteStruct("", cv::FileNode::SEQ);
+    output << "[\n";
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        bool first = true;
         for (const auto& item : cameras_) {
             const auto& config = item.second->config;
-            storage.startWriteStruct("", cv::FileNode::MAP);
-            storage << "url" << config.rtsp_url;
-            storage << "label" << config.label;
-            storage << "line_p1" << "[" << config.line.x1 << config.line.y1 << "]";
-            storage << "line_p2" << "[" << config.line.x2 << config.line.y2 << "]";
-            storage << "frame_skip" << config.frame_skip;
-            storage.endWriteStruct();
+            if (!first) {
+                output << ",\n";
+            }
+            first = false;
+            output << "  {\n";
+            output << "    \"url\": \"" << escape_json(config.rtsp_url) << "\",\n";
+            output << "    \"label\": \"" << escape_json(config.label) << "\",\n";
+            output << "    \"line_p1\": [" << config.line.x1 << ", " << config.line.y1 << "],\n";
+            output << "    \"line_p2\": [" << config.line.x2 << ", " << config.line.y2 << "],\n";
+            output << "    \"frame_skip\": " << config.frame_skip << ",\n";
+            output << "    \"inference_size\": " << config.inference_size << "\n";
+            output << "  }";
         }
     }
-    storage.endWriteStruct();
-    storage.release();
+    output << "\n]\n";
     return true;
 }
 
