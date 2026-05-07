@@ -44,6 +44,8 @@ Fokus proyek ini:
   Jalankan server.
 - [setup_debian.sh](/Users/oentoro/Projects/comvisplus/setup_debian.sh)
   Install dependency Debian dasar.
+- [export_openvino_model.sh](/Users/oentoro/Projects/comvisplus/export_openvino_model.sh)
+  Buat virtualenv sementara dan export model Ultralytics ke OpenVINO.
 
 ## Setup Debian
 
@@ -64,6 +66,12 @@ git
 curl
 wget
 libopencv-dev
+```
+
+Untuk tahap export model, kamu juga butuh Python:
+
+```bash
+sudo apt install -y python3 python3-pip python3-venv
 ```
 
 ## Install OpenVINO
@@ -100,8 +108,21 @@ Catatan:
 Export model dari Ultralytics:
 
 ```bash
-yolo export model=yolov8n.pt format=openvino imgsz=320
+./export_openvino_model.sh
 ```
+
+Override opsional:
+
+```bash
+export MODEL_PATH=./yolov8n.pt
+export IMG_SIZE=320
+./export_openvino_model.sh
+```
+
+Script ini akan:
+- membuat virtualenv `.venv-export`
+- install `ultralytics`
+- menjalankan export ke format `OpenVINO`
 
 Untuk hardware lama, tetap disarankan:
 - `yolov8n`
