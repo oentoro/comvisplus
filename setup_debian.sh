@@ -52,7 +52,8 @@ Install OpenVINO runtime archive resmi dulu, lalu source environment:
 Setelah itu lanjutkan dengan:
 
   ./build_debian.sh
-  export RTSP_URL='rtsp://user:password@camera/stream'
   ./run_debian.sh
+
+RTSP_URL opsional dan hanya dipakai untuk bootstrap kamera pertama.
 EOF
 fi

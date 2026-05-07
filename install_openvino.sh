@@ -79,8 +79,19 @@ fi
 echo "[info] Moving extracted runtime to ${INSTALL_DIR} ..."
 ${SUDO} mv "${ARCHIVE_NAME}" "${INSTALL_DIR}"
 
-echo "[info] Installing OpenVINO system dependencies..."
-${SUDO} -E "${INSTALL_DIR}/install_dependencies/install_openvino_dependencies.sh"
+DEPENDENCY_SCRIPT="${INSTALL_DIR}/install_dependencies/install_openvino_dependencies.sh"
+
+if [[ -x "${DEPENDENCY_SCRIPT}" ]]; then
+  echo "[info] Installing OpenVINO system dependencies..."
+  if ! ${SUDO} -E "${DEPENDENCY_SCRIPT}"; then
+    echo "[warn] Dependency installer bawaan OpenVINO gagal dijalankan."
+    echo "[warn] Ini umum terjadi di Debian 13 karena script upstream belum mengenali distro itu."
+    echo "[warn] Instalasi runtime tetap dilanjutkan."
+    echo "[warn] Jika saat build/run ada library yang kurang, install manual lewat apt lalu coba lagi."
+  fi
+else
+  echo "[warn] Dependency installer OpenVINO tidak ditemukan di ${DEPENDENCY_SCRIPT}."
+fi
 
 if [[ -L "${SYMLINK_PATH}" || -e "${SYMLINK_PATH}" ]]; then
   ${SUDO} rm -rf "${SYMLINK_PATH}"
@@ -102,6 +113,10 @@ Or use the stable symlink:
 Next steps:
 
   ./build_debian.sh
+  ./run_debian.sh
+
+Optional bootstrap camera:
+
   export RTSP_URL='rtsp://user:password@camera/stream'
   ./run_debian.sh
 
