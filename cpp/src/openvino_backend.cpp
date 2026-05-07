@@ -82,8 +82,6 @@ struct OpenVinoBackend::Impl {
     ov::Core core;
     ov::CompiledModel compiled_model;
     ov::Shape input_shape;
-    std::string input_name;
-    std::string output_name;
 };
 #endif
 
@@ -95,10 +93,7 @@ OpenVinoBackend::OpenVinoBackend(const AppConfig& app_config) : app_config_(app_
         auto model = impl_->core.read_model(resolved_model_path);
         impl_->compiled_model = impl_->core.compile_model(model, "CPU");
         const auto input = impl_->compiled_model.input();
-        const auto output = impl_->compiled_model.output();
         impl_->input_shape = input.get_shape();
-        impl_->input_name = input.get_any_name();
-        impl_->output_name = output.get_any_name();
         available_ = true;
         status_ = "OpenVINO model loaded from " + resolved_model_path;
     } catch (const std::exception& ex) {
