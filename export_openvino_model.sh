@@ -32,7 +32,12 @@ python -m pip install --upgrade pip
 python -m pip install ultralytics
 
 echo "[info] Exporting ${MODEL_PATH} to OpenVINO with imgsz=${IMG_SIZE} ..."
-python -m ultralytics export model="${MODEL_PATH}" format=openvino imgsz="${IMG_SIZE}"
+python - <<PY
+from ultralytics import YOLO
+
+model = YOLO(r"${MODEL_PATH}")
+model.export(format="openvino", imgsz=${IMG_SIZE})
+PY
 
 echo
 echo "[ok] Export selesai."
