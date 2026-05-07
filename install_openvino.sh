@@ -8,6 +8,7 @@ INSTALL_BASE="${INSTALL_BASE:-/opt/intel}"
 INSTALL_DIR="${INSTALL_BASE}/openvino_${OPENVINO_VERSION}"
 SYMLINK_PATH="${INSTALL_BASE}/openvino_${OPENVINO_MAJOR}"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-${HOME}/Downloads}"
+LINUX_FLAVOR="${LINUX_FLAVOR:-}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   SUDO="sudo"
@@ -19,7 +20,10 @@ ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
 
 case "${ARCH}" in
   amd64|x86_64)
-    ARCHIVE_NAME="openvino_toolkit_centos7_${OPENVINO_VERSION}.${OPENVINO_BUILD}_x86_64"
+    if [[ -z "${LINUX_FLAVOR}" ]]; then
+      LINUX_FLAVOR="ubuntu22"
+    fi
+    ARCHIVE_NAME="openvino_toolkit_${LINUX_FLAVOR}_${OPENVINO_VERSION}.${OPENVINO_BUILD}_x86_64"
     ;;
   arm64|aarch64)
     ARCHIVE_NAME="openvino_toolkit_ubuntu20_${OPENVINO_VERSION}.${OPENVINO_BUILD}_arm64"
@@ -38,6 +42,9 @@ ARCHIVE_URL="https://storage.openvinotoolkit.org/repositories/openvino/packages/
 
 echo "[info] OpenVINO version : ${OPENVINO_VERSION}"
 echo "[info] Architecture     : ${ARCH}"
+if [[ -n "${LINUX_FLAVOR}" ]]; then
+  echo "[info] Linux flavor     : ${LINUX_FLAVOR}"
+fi
 echo "[info] Archive URL      : ${ARCHIVE_URL}"
 echo "[info] Install dir      : ${INSTALL_DIR}"
 

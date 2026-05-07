@@ -95,12 +95,12 @@ source /opt/intel/openvino_2025/setupvars.sh
 ```
 
 Script installer ini memakai URL archive resmi OpenVINO 2025.4 dan memilih paket berdasarkan arsitektur:
-- `amd64` -> archive `centos7 x86_64`
+- `amd64` -> archive `ubuntu22 x86_64`
 - `arm64` -> archive `ubuntu20 arm64`
 - `armhf` -> archive `debian10 armhf`
 
 Catatan:
-- untuk Debian `amd64`, OpenVINO tidak menyediakan archive Debian x86_64 khusus di halaman resmi yang saya rujuk, jadi script memakai archive `centos7 x86_64`, sama seperti rekomendasi manual yang sebelumnya saya berikan
+- untuk Debian `amd64`, OpenVINO tidak menyediakan archive Debian x86_64 khusus di halaman resmi, tetapi dokumentasi resmi menyediakan archive `ubuntu20`, `ubuntu22`, dan `ubuntu24` untuk `x86_64`; script sekarang default ke `ubuntu22`, yang lebih cocok untuk toolchain modern daripada `centos7`
 - kalau Intel mengubah URL atau versi archive di masa depan, isi script mungkin perlu disesuaikan
 
 ## Export Model
