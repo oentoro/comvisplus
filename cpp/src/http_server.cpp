@@ -319,14 +319,10 @@ std::string root_page() {
       const svg = document.getElementById(`overlay-${id}`);
       if (!cam || !svg) return;
 
-      const w = svg.clientWidth;
-      const h = svg.clientHeight;
-      if (!w || !h) return;
-
-      const x1 = cam.x1 * w;
-      const y1 = cam.y1 * h;
-      const x2 = cam.x2 * w;
-      const y2 = cam.y2 * h;
+      const x1 = cam.x1 * 100;
+      const y1 = cam.y1 * 100;
+      const x2 = cam.x2 * 100;
+      const y2 = cam.y2 * 100;
 
       const hit = document.getElementById(`line-hit-${id}`);
       const line = document.getElementById(`line-main-${id}`);
