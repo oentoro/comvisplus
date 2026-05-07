@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD_DIR="${ROOT_DIR}/build"
+BINARY_PATH="${BUILD_DIR}/comvisplus_native"
+
+OPENVINO_DEFAULT="/opt/intel/openvino_2025.4.0"
+DEFAULT_MODEL_DIR="${ROOT_DIR}/yolov8n_openvino_model"
+DEFAULT_HOST="0.0.0.0"
+DEFAULT_PORT="5000"
+
+MODEL_PATH="${MODEL_PATH:-${DEFAULT_MODEL_DIR}}"
+HOST="${HOST:-${DEFAULT_HOST}}"
+PORT="${PORT:-${DEFAULT_PORT}}"
+
+if [[ -f "${OPENVINO_DEFAULT}/setupvars.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "${OPENVINO_DEFAULT}/setupvars.sh"
+  echo "[info] OpenVINO environment loaded from ${OPENVINO_DEFAULT}"
+else
+  echo "[warn] ${OPENVINO_DEFAULT}/setupvars.sh tidak ditemukan."
+  echo "[warn] Jika OpenVINO ada di lokasi lain, source manual dulu sebelum menjalankan script ini."
+fi
+
+if [[ ! -x "${BINARY_PATH}" ]]; then
+  echo "[error] Binary belum ada: ${BINARY_PATH}"
+  echo "Build dulu dengan:"
+  echo "  ./build_debian.sh"
+  exit 1
+fi
+
+if [[ ! -d "${MODEL_PATH}" && ! -f "${MODEL_PATH}" ]]; then
+  echo "[error] Model OpenVINO tidak ditemukan di: ${MODEL_PATH}"
+  echo "Export dulu modelnya, misalnya:"
+  echo "  yolo export model=yolov8n.pt format=openvino imgsz=320"
+  exit 1
+fi
+
+if [[ -z "${RTSP_URL:-}" ]]; then
+  echo "[error] Environment variable RTSP_URL belum diset."
+  echo "Contoh:"
+  echo "  export RTSP_URL='rtsp://user:password@camera/stream'"
+  exit 1
+fi
+
+echo "[info] Starting server..."
+echo "[info] Host  : ${HOST}"
+echo "[info] Port  : ${PORT}"
+echo "[info] Model : ${MODEL_PATH}"
+echo "[info] RTSP  : ${RTSP_URL}"
+
+exec "${BINARY_PATH}" --host "${HOST}" --port "${PORT}" --model "${MODEL_PATH}"

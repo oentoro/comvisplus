@@ -7,3 +7,4 @@ cameras.json
 *.mp4
 screenshots/
 .DS_Store
+build/
