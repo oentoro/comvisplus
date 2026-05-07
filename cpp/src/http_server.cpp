@@ -18,8 +18,11 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
+
+std::string trim_copy(const std::string& input);
 
 std::string json_escape(const std::string& input) {
     std::string output;
@@ -75,6 +78,82 @@ std::string http_bad_request(const std::string& message) {
 
 std::string http_server_error(const std::string& message) {
     return http_json(500, "Internal Server Error", "{\"error\":\"" + json_escape(message) + "\"}");
+}
+
+std::string http_unauthorized() {
+    const std::string body = "{\"error\":\"authentication required\"}";
+    std::ostringstream out;
+    out
+        << "HTTP/1.1 401 Unauthorized\r\n"
+        << "WWW-Authenticate: Basic realm=\"Comvisplus\"\r\n"
+        << "Content-Type: application/json\r\n"
+        << "Content-Length: " << body.size() << "\r\n"
+        << "Cache-Control: no-cache\r\n"
+        << "Connection: close\r\n\r\n"
+        << body;
+    return out.str();
+}
+
+std::string base64_encode(const std::string& input) {
+    static constexpr char table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    std::string output;
+    output.reserve(((input.size() + 2) / 3) * 4);
+
+    for (std::size_t i = 0; i < input.size(); i += 3) {
+        const unsigned int octet_a = static_cast<unsigned char>(input[i]);
+        const unsigned int octet_b = (i + 1 < input.size()) ? static_cast<unsigned char>(input[i + 1]) : 0;
+        const unsigned int octet_c = (i + 2 < input.size()) ? static_cast<unsigned char>(input[i + 2]) : 0;
+        const unsigned int triple = (octet_a << 16U) | (octet_b << 8U) | octet_c;
+
+        output += table[(triple >> 18U) & 0x3FU];
+        output += table[(triple >> 12U) & 0x3FU];
+        output += (i + 1 < input.size()) ? table[(triple >> 6U) & 0x3FU] : '=';
+        output += (i + 2 < input.size()) ? table[triple & 0x3FU] : '=';
+    }
+
+    return output;
+}
+
+std::string lower_copy(const std::string& input) {
+    std::string output = input;
+    std::transform(output.begin(), output.end(), output.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return output;
+}
+
+std::string header_value(const std::string& request_head, const std::string& header_name) {
+    const std::string wanted = lower_copy(header_name);
+    std::istringstream lines(request_head);
+    std::string line;
+
+    while (std::getline(lines, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        const auto sep = line.find(':');
+        if (sep == std::string::npos) {
+            continue;
+        }
+
+        if (lower_copy(trim_copy(line.substr(0, sep))) == wanted) {
+            return trim_copy(line.substr(sep + 1));
+        }
+    }
+
+    return {};
+}
+
+bool is_authorized(const comvisplus::AppConfig& config, const std::string& request_head) {
+    if (!config.auth_enabled) {
+        return true;
+    }
+
+    const std::string auth = header_value(request_head, "Authorization");
+    const std::string expected = "Basic " + base64_encode(config.auth_username + ":" + config.auth_password);
+    return auth == expected;
 }
 
 std::string trim_copy(const std::string& input) {
@@ -787,6 +866,13 @@ void HttpServer::handle_client(int client_fd) const {
     std::string path;
     std::string version;
     request_stream >> method >> path >> version;
+
+    if (!is_authorized(app_config_, request_head)) {
+        const auto response = http_unauthorized();
+        ::send(client_fd, response.data(), response.size(), 0);
+        ::close(client_fd);
+        return;
+    }
 
     if (path == "/") {
         if (method != "GET") {

@@ -163,6 +163,8 @@ Override opsional:
 export HOST=0.0.0.0
 export PORT=5000
 export MODEL_PATH=./yolov8n_openvino_model
+export AUTH_USERNAME=admin
+export AUTH_PASSWORD='ganti-password-ini'
 export RTSP_URL='rtsp://user:password@camera/stream'
 ./run_debian.sh
 ```
@@ -170,6 +172,9 @@ export RTSP_URL='rtsp://user:password@camera/stream'
 Catatan:
 - `RTSP_URL` hanya dipakai saat startup jika `cameras.json` masih kosong
 - setelah itu, pengelolaan kamera dilakukan dari web dan disimpan ke `cameras.json`
+- dashboard memakai `Basic Auth` secara default
+- username/password default adalah `admin`/`admin`, ubah lewat `AUTH_USERNAME` dan `AUTH_PASSWORD`
+- untuk menonaktifkan auth saat testing lokal, jalankan binary dengan `--no-auth`
 
 Setelah jalan, buka:
 
@@ -184,10 +189,10 @@ Yang sudah ada:
 - persistensi `cameras.json`
 - drag line editor di browser
 - restart worker saat RTSP kamera diubah
+- Basic Auth untuk dashboard dan endpoint web
+- screenshot gallery untuk crossing
 
 Yang masih baseline / belum final:
 - parser output model `OpenVINO` masih perlu validasi di mesin Debian target
-- auth/login belum ada
-- screenshot gallery belum ada
 - SSE belum ada
 - compile test belum diverifikasi di environment Debian dari sesi ini
