@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <fstream>
+#include <iostream>
 #include <opencv2/core/persistence.hpp>
 #include <sstream>
 
