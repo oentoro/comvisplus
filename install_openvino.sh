@@ -61,11 +61,35 @@ fi
 mkdir -p "${DOWNLOAD_DIR}"
 cd "${DOWNLOAD_DIR}"
 
-if [[ ! -f "${ARCHIVE_FILE}" ]]; then
+download_archive() {
   echo "[info] Downloading OpenVINO archive..."
+  rm -f "${ARCHIVE_FILE}"
   curl -L "${ARCHIVE_URL}" --output "${ARCHIVE_FILE}"
+}
+
+archive_matches_target() {
+  tar -tf "${ARCHIVE_FILE}" 2>/dev/null | grep -q "^${ARCHIVE_NAME}/"
+}
+
+if [[ ! -f "${ARCHIVE_FILE}" ]]; then
+  download_archive
 else
   echo "[info] Using existing archive ${DOWNLOAD_DIR}/${ARCHIVE_FILE}"
+  if ! archive_matches_target; then
+    echo "[warn] Existing archive does not match expected variant: ${ARCHIVE_NAME}"
+    echo "[warn] Re-downloading the correct archive."
+    download_archive
+  fi
+fi
+
+if ! archive_matches_target; then
+  echo "[error] Archive content still does not match expected variant: ${ARCHIVE_NAME}"
+  exit 1
+fi
+
+if [[ -d "${ARCHIVE_NAME}" ]]; then
+  echo "[info] Removing existing extracted directory ${DOWNLOAD_DIR}/${ARCHIVE_NAME}"
+  rm -rf "${ARCHIVE_NAME}"
 fi
 
 echo "[info] Extracting archive..."
