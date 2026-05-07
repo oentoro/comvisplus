@@ -12,6 +12,8 @@ Fokus proyek ini:
 - tampilkan hasil di web
 - kelola kamera langsung dari browser
 
+`RTSP_URL` sekarang bersifat opsional. Aplikasi bisa start tanpa variable itu, memuat kamera dari [cameras.json](/Users/oentoro/Projects/comvisplus/cameras.json), lalu menambah atau menghapus kamera langsung dari antarmuka web.
+
 ## Fitur Saat Ini
 
 - server web lokal
@@ -48,7 +50,7 @@ Fokus proyek ini:
 Jalankan:
 
 ```bash
-chmod +x setup_debian.sh build_debian.sh run_debian.sh
+chmod +x setup_debian.sh install_openvino.sh build_debian.sh run_debian.sh
 ./setup_debian.sh
 ```
 
@@ -66,13 +68,32 @@ libopencv-dev
 
 ## Install OpenVINO
 
-Install `OpenVINO Runtime` dari archive resmi, lalu aktifkan environment:
+Install `OpenVINO Runtime` dari archive resmi:
+
+```bash
+./install_openvino.sh
+```
+
+Lalu aktifkan environment:
 
 ```bash
 source /opt/intel/openvino_2025.4.0/setupvars.sh
 ```
 
-Kalau lokasi instalasi berbeda, sesuaikan path-nya.
+Atau lewat symlink stabil:
+
+```bash
+source /opt/intel/openvino_2025/setupvars.sh
+```
+
+Script installer ini memakai URL archive resmi OpenVINO 2025.4 dan memilih paket berdasarkan arsitektur:
+- `amd64` -> archive `centos7 x86_64`
+- `arm64` -> archive `ubuntu20 arm64`
+- `armhf` -> archive `debian10 armhf`
+
+Catatan:
+- untuk Debian `amd64`, OpenVINO tidak menyediakan archive Debian x86_64 khusus di halaman resmi yang saya rujuk, jadi script memakai archive `centos7 x86_64`, sama seperti rekomendasi manual yang sebelumnya saya berikan
+- kalau Intel mengubah URL atau versi archive di masa depan, isi script mungkin perlu disesuaikan
 
 ## Export Model
 
@@ -100,6 +121,16 @@ source /opt/intel/openvino_2025.4.0/setupvars.sh
 
 ## Run
 
+Jalankan langsung:
+
+```bash
+./run_debian.sh
+```
+
+Kalau [cameras.json](/Users/oentoro/Projects/comvisplus/cameras.json) sudah berisi data, kamera akan dimuat otomatis. Kalau masih kosong, server tetap start dan kamera bisa ditambahkan dari browser.
+
+`RTSP_URL` hanya opsional untuk bootstrap kamera pertama:
+
 ```bash
 export RTSP_URL='rtsp://user:password@camera/stream'
 ./run_debian.sh
@@ -114,6 +145,10 @@ export MODEL_PATH=./yolov8n_openvino_model
 export RTSP_URL='rtsp://user:password@camera/stream'
 ./run_debian.sh
 ```
+
+Catatan:
+- `RTSP_URL` hanya dipakai saat startup jika `cameras.json` masih kosong
+- setelah itu, pengelolaan kamera dilakukan dari web dan disimpan ke `cameras.json`
 
 Setelah jalan, buka:
 

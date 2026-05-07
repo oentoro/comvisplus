@@ -37,17 +37,17 @@ if [[ ! -d "${MODEL_PATH}" && ! -f "${MODEL_PATH}" ]]; then
   exit 1
 fi
 
-if [[ -z "${RTSP_URL:-}" ]]; then
-  echo "[error] Environment variable RTSP_URL belum diset."
-  echo "Contoh:"
-  echo "  export RTSP_URL='rtsp://user:password@camera/stream'"
-  exit 1
-fi
-
 echo "[info] Starting server..."
 echo "[info] Host  : ${HOST}"
 echo "[info] Port  : ${PORT}"
 echo "[info] Model : ${MODEL_PATH}"
-echo "[info] RTSP  : ${RTSP_URL}"
+
+if [[ -n "${RTSP_URL:-}" ]]; then
+  echo "[info] RTSP bootstrap : ${RTSP_URL}"
+  echo "[info] RTSP_URL hanya dipakai jika cameras.json masih kosong."
+else
+  echo "[info] RTSP bootstrap : <tidak diset>"
+  echo "[info] Kamera akan dimuat dari cameras.json atau ditambahkan lewat web."
+fi
 
 exec "${BINARY_PATH}" --host "${HOST}" --port "${PORT}" --model "${MODEL_PATH}"
