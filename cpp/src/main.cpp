@@ -22,18 +22,21 @@ int main(int argc, char** argv) {
     auto engine = std::make_shared<CounterEngine>(config);
     auto manager = std::make_shared<CameraManager>(config, engine);
 
+    const bool loaded_from_disk = manager->load_from_disk();
     const char* rtsp_url = std::getenv("RTSP_URL");
-    if (rtsp_url != nullptr && *rtsp_url != '\0') {
+    if (!loaded_from_disk && rtsp_url != nullptr && *rtsp_url != '\0') {
         CameraConfig camera;
         camera.label = "RTSP Camera";
         camera.rtsp_url = rtsp_url;
         manager->add_camera(camera);
-    } else {
+        manager->save_to_disk();
+    } else if (!loaded_from_disk) {
         std::cout << "RTSP_URL not set. Starting with demo placeholder camera.\n";
         CameraConfig demo_camera;
         demo_camera.label = "Demo RTSP Camera";
         demo_camera.rtsp_url = "rtsp://user:password@camera/stream";
         manager->add_camera(demo_camera);
+        manager->save_to_disk();
     }
 
     HttpServer server(config, manager);

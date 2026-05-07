@@ -18,6 +18,10 @@ public:
 
     std::string add_camera(const CameraConfig& config);
     bool remove_camera(const std::string& camera_id);
+    bool update_camera(const std::string& camera_id, const CameraConfig& config);
+    bool update_line(const std::string& camera_id, const LineConfig& line);
+    bool load_from_disk();
+    bool save_to_disk() const;
 
     std::vector<CameraConfig> list_configs() const;
     std::vector<CameraRuntimePtr> list_runtimes() const;
