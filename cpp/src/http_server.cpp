@@ -10,6 +10,8 @@
 #include <chrono>
 #include <cctype>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <iostream>
 #include <sstream>
@@ -69,6 +71,10 @@ std::string http_method_not_allowed() {
 
 std::string http_bad_request(const std::string& message) {
     return http_json(400, "Bad Request", "{\"error\":\"" + json_escape(message) + "\"}");
+}
+
+std::string http_server_error(const std::string& message) {
+    return http_json(500, "Internal Server Error", "{\"error\":\"" + json_escape(message) + "\"}");
 }
 
 std::string trim_copy(const std::string& input) {
@@ -143,6 +149,19 @@ int parse_int_or_default(const std::map<std::string, std::string>& values, const
     }
 }
 
+std::string guess_content_type(const std::string& path) {
+    if (path.size() >= 5 && path.substr(path.size() - 5) == ".jpeg") {
+        return "image/jpeg";
+    }
+    if (path.size() >= 4 && path.substr(path.size() - 4) == ".jpg") {
+        return "image/jpeg";
+    }
+    if (path.size() >= 4 && path.substr(path.size() - 4) == ".png") {
+        return "image/png";
+    }
+    return "application/octet-stream";
+}
+
 std::string root_page() {
     return R"HTML(<!DOCTYPE html>
 <html lang="en">
@@ -173,6 +192,12 @@ std::string root_page() {
     .stats { display:flex; gap:10px; padding:10px 12px; font-size:13px; color:#9ca3af; flex-wrap:wrap; }
     .pill { color:#fff; font-weight:700; }
     .actions { padding:0 12px 12px; display:flex; justify-content:flex-end; gap:8px; }
+    .gallery { margin-top:20px; }
+    .gallery-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+    .shot { background:#1f2937; border:1px solid #374151; border-radius:12px; overflow:hidden; }
+    .shot img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:#000; }
+    .shot-meta { padding:10px 12px; font-size:12px; color:#9ca3af; }
+    .shot-meta strong { display:block; color:#e5e7eb; margin-bottom:4px; }
   </style>
 </head>
 <body>
@@ -194,6 +219,10 @@ std::string root_page() {
   </div>
   <div class="msg" id="msg"></div>
   <div id="grid"></div>
+  <div class="gallery">
+    <h2 style="font-size:18px;margin:20px 0 12px;color:#e5e7eb">Screenshot Crossing</h2>
+    <div id="shots" class="gallery-grid"></div>
+  </div>
   <script>
     let cameraState = [];
     const dragState = { id: null, mode: null, start: null };
@@ -400,6 +429,7 @@ std::string root_page() {
 
     async function load() {
       const cameras = await fetch('/cameras').then(r => r.json()).catch(() => []);
+      const screenshots = await fetch('/screenshots').then(r => r.json()).catch(() => []);
       cameraState = cameras;
       const grid = document.getElementById('grid');
       grid.innerHTML = '';
@@ -437,6 +467,21 @@ std::string root_page() {
           </div>`;
         grid.appendChild(card);
         requestAnimationFrame(() => updateOverlay(cam.id));
+      });
+
+      const shots = document.getElementById('shots');
+      shots.innerHTML = '';
+      screenshots.forEach(shot => {
+        const card = document.createElement('div');
+        card.className = 'shot';
+        card.innerHTML = `
+          <img src="${shot.url}" alt="${shot.file}">
+          <div class="shot-meta">
+            <strong>${shot.camera}</strong>
+            <div>${shot.time}</div>
+            <div>${shot.direction}</div>
+          </div>`;
+        shots.appendChild(card);
       });
     }
     load();
@@ -725,6 +770,121 @@ void HttpServer::handle_client(int client_fd) const {
         return;
     }
 
+    if (path == "/screenshots") {
+        if (method != "GET") {
+            const auto response = http_method_not_allowed();
+            ::send(client_fd, response.data(), response.size(), 0);
+            ::close(client_fd);
+            return;
+        }
+
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::create_directories(app_config_.screenshots_dir, ec);
+
+        struct ShotItem {
+            std::string file;
+            std::string camera;
+            std::string time;
+            std::string direction;
+            fs::file_time_type mtime;
+        };
+
+        std::vector<ShotItem> items;
+        for (const auto& entry : fs::directory_iterator(app_config_.screenshots_dir, ec)) {
+            if (ec || !entry.is_regular_file()) {
+                continue;
+            }
+            const std::string filename = entry.path().filename().string();
+            const auto first = filename.find('_');
+            const auto second = first == std::string::npos ? std::string::npos : filename.find('_', first + 1);
+            const auto third = second == std::string::npos ? std::string::npos : filename.find('_', second + 1);
+            const auto fourth = third == std::string::npos ? std::string::npos : filename.find('_', third + 1);
+
+            ShotItem item;
+            item.file = filename;
+            item.camera = first == std::string::npos ? filename : filename.substr(0, first);
+            item.time = second == std::string::npos
+                ? ""
+                : filename.substr(first + 1, second - first - 1) + " " + filename.substr(second + 1, third - second - 1);
+            item.direction = third == std::string::npos
+                ? ""
+                : filename.substr(third + 1, fourth == std::string::npos ? std::string::npos : fourth - third - 1);
+            item.mtime = entry.last_write_time(ec);
+            items.push_back(item);
+        }
+
+        std::sort(items.begin(), items.end(), [](const ShotItem& lhs, const ShotItem& rhs) {
+            return lhs.mtime > rhs.mtime;
+        });
+
+        std::ostringstream body;
+        body << '[';
+        bool first = true;
+        for (const auto& item : items) {
+            if (!first) {
+                body << ',';
+            }
+            first = false;
+            body
+                << '{'
+                << "\"file\":\"" << json_escape(item.file) << "\","
+                << "\"camera\":\"" << json_escape(item.camera) << "\","
+                << "\"time\":\"" << json_escape(item.time) << "\","
+                << "\"direction\":\"" << json_escape(item.direction) << "\","
+                << "\"url\":\"/screenshots/" << json_escape(item.file) << "\""
+                << '}';
+        }
+        body << ']';
+        const auto response = http_ok("application/json", body.str());
+        ::send(client_fd, response.data(), response.size(), 0);
+        ::close(client_fd);
+        return;
+    }
+
+    if (path.rfind("/screenshots/", 0) == 0) {
+        if (method != "GET") {
+            const auto response = http_method_not_allowed();
+            ::send(client_fd, response.data(), response.size(), 0);
+            ::close(client_fd);
+            return;
+        }
+
+        const std::string filename = path.substr(std::strlen("/screenshots/"));
+        if (filename.find("..") != std::string::npos || filename.find('/') != std::string::npos) {
+            const auto response = http_bad_request("invalid screenshot path");
+            ::send(client_fd, response.data(), response.size(), 0);
+            ::close(client_fd);
+            return;
+        }
+
+        namespace fs = std::filesystem;
+        const fs::path image_path = fs::path(app_config_.screenshots_dir) / filename;
+        std::ifstream input(image_path, std::ios::binary);
+        if (!input.good()) {
+            const auto response = http_not_found();
+            ::send(client_fd, response.data(), response.size(), 0);
+            ::close(client_fd);
+            return;
+        }
+
+        std::ostringstream buffer_stream;
+        buffer_stream << input.rdbuf();
+        const std::string body = buffer_stream.str();
+        std::ostringstream header;
+        header
+            << "HTTP/1.1 200 OK\r\n"
+            << "Content-Type: " << guess_content_type(filename) << "\r\n"
+            << "Content-Length: " << body.size() << "\r\n"
+            << "Cache-Control: no-cache\r\n"
+            << "Connection: close\r\n\r\n";
+        const std::string header_str = header.str();
+        ::send(client_fd, header_str.data(), header_str.size(), 0);
+        ::send(client_fd, body.data(), body.size(), 0);
+        ::close(client_fd);
+        return;
+    }
+
     if (path.rfind("/stats/", 0) == 0) {
         if (method != "GET") {
             const auto response = http_method_not_allowed();
@@ -832,6 +992,8 @@ void HttpServer::print_routes() const {
     std::cout << "[routes] POST /cameras/{id}\n";
     std::cout << "[routes] DELETE /cameras/{id}\n";
     std::cout << "[routes] POST /line/{id}\n";
+    std::cout << "[routes] GET /screenshots\n";
+    std::cout << "[routes] GET /screenshots/{file}\n";
     std::cout << "[routes] GET /feed/{id}\n";
     std::cout << "[routes] GET /stats/{id}\n";
 }

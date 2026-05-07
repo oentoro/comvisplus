@@ -4,8 +4,11 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
-#include <unordered_map>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -32,12 +35,18 @@ struct Track {
     int id = 0;
     cv::Point center;
     cv::Rect box;
+    cv::Point2f velocity {0.0F, 0.0F};
     float confidence = 0.0F;
     int frames_seen = 0;
     int missed_frames = 0;
     bool counted = false;
     int last_side = 0;
     TrackState state = TrackState::Tracked;
+};
+
+struct CrossingEvent {
+    int track_id = 0;
+    std::string direction;
 };
 
 cv::Point to_point(const LineConfig& line, int width, int height, bool first) {
@@ -160,6 +169,71 @@ void draw_detection(cv::Mat& frame, const Detection& detection, int track_id) {
     );
 }
 
+std::string sanitize_filename_part(const std::string& input) {
+    std::string output;
+    output.reserve(input.size());
+    for (const char ch : input) {
+        if (std::isalnum(static_cast<unsigned char>(ch)) != 0) {
+            output += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        } else if (ch == '-' || ch == '_') {
+            output += ch;
+        } else {
+            output += '_';
+        }
+    }
+    if (output.empty()) {
+        output = "camera";
+    }
+    return output;
+}
+
+std::string make_screenshot_filename(const CameraRuntime& runtime, const CrossingEvent& event) {
+    using clock = std::chrono::system_clock;
+    const auto now = clock::now();
+    const auto seconds = clock::to_time_t(now);
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000;
+
+    std::tm local_tm {};
+#if defined(_WIN32)
+    localtime_s(&local_tm, &seconds);
+#else
+    localtime_r(&seconds, &local_tm);
+#endif
+
+    std::ostringstream name;
+    name
+        << sanitize_filename_part(runtime.config.label.empty() ? runtime.config.id : runtime.config.label)
+        << '_'
+        << std::put_time(&local_tm, "%Y%m%d_%H%M%S")
+        << '_'
+        << std::setw(3) << std::setfill('0') << millis
+        << '_'
+        << event.direction
+        << "_track" << event.track_id
+        << ".jpg";
+    return name.str();
+}
+
+void save_crossing_screenshots(
+    const AppConfig& app_config,
+    const CameraRuntime& runtime,
+    const cv::Mat& frame,
+    const std::vector<CrossingEvent>& events
+) {
+    if (events.empty() || frame.empty()) {
+        return;
+    }
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(app_config.screenshots_dir, ec);
+
+    for (const auto& event : events) {
+        const fs::path output_path = fs::path(app_config.screenshots_dir) / make_screenshot_filename(runtime, event);
+        cv::imwrite(output_path.string(), frame);
+    }
+}
+
 cv::Rect detection_rect(const Detection& detection) {
     const int x1 = static_cast<int>(std::round(detection.x1));
     const int y1 = static_cast<int>(std::round(detection.y1));
@@ -185,17 +259,29 @@ float rect_iou(const cv::Rect& lhs, const cv::Rect& rhs) {
     return inter_area / union_area;
 }
 
+cv::Rect predict_box(const Track& track) {
+    const int dx = static_cast<int>(std::round(track.velocity.x));
+    const int dy = static_cast<int>(std::round(track.velocity.y));
+    return cv::Rect(track.box.x + dx, track.box.y + dy, track.box.width, track.box.height);
+}
+
 void apply_detection_to_track(
     Track& track,
     const Detection& detection,
     const LineConfig& line,
     CounterStats& stats,
     int frame_width,
-    int frame_height
+    int frame_height,
+    std::vector<CrossingEvent>& events
 ) {
+    const cv::Point previous_center = track.center;
     const cv::Point center = detection_center(detection);
     track.center = center;
     track.box = detection_rect(detection);
+    track.velocity = cv::Point2f(
+        (track.velocity.x * 0.7F) + (static_cast<float>(center.x - previous_center.x) * 0.3F),
+        (track.velocity.y * 0.7F) + (static_cast<float>(center.y - previous_center.y) * 0.3F)
+    );
     track.confidence = detection.confidence;
     track.frames_seen += 1;
     track.missed_frames = 0;
@@ -207,8 +293,10 @@ void apply_detection_to_track(
         stats.total += 1;
         if (new_side == 1) {
             stats.right += 1;
+            events.push_back({track.id, "right"});
         } else {
             stats.left += 1;
+            events.push_back({track.id, "left"});
         }
     }
     track.last_side = new_side;
@@ -223,7 +311,8 @@ void match_tracks_to_detections(
     CounterStats& stats,
     int frame_width,
     int frame_height,
-    float min_iou
+    float min_iou,
+    std::vector<CrossingEvent>& events
 ) {
     while (true) {
         float best_iou = min_iou;
@@ -238,7 +327,7 @@ void match_tracks_to_detections(
                 if (matched_detections[di]) {
                     continue;
                 }
-                const float iou = rect_iou(tracks[ti].box, detection_rect(detections[di]));
+                const float iou = rect_iou(predict_box(tracks[ti]), detection_rect(detections[di]));
                 if (iou > best_iou) {
                     best_iou = iou;
                     best_track = static_cast<int>(ti);
@@ -259,7 +348,8 @@ void match_tracks_to_detections(
             line,
             stats,
             frame_width,
-            frame_height
+            frame_height,
+            events
         );
     }
 }
@@ -271,7 +361,8 @@ void update_tracks(
     CounterStats& stats,
     int frame_width,
     int frame_height,
-    int& next_track_id
+    int& next_track_id,
+    std::vector<CrossingEvent>& events
 ) {
     std::vector<Detection> high_confidence;
     std::vector<Detection> low_confidence;
@@ -297,7 +388,8 @@ void update_tracks(
         stats,
         frame_width,
         frame_height,
-        kTrackIouThreshold
+        kTrackIouThreshold,
+        events
     );
 
     std::vector<bool> matched_low(low_confidence.size(), false);
@@ -310,13 +402,18 @@ void update_tracks(
         stats,
         frame_width,
         frame_height,
-        kTrackIouThreshold * 0.8F
+        kTrackIouThreshold * 0.8F,
+        events
     );
 
     for (std::size_t i = 0; i < tracks.size(); ++i) {
         if (matched_tracks[i]) {
             continue;
         }
+        tracks[i].center.x += static_cast<int>(std::round(tracks[i].velocity.x));
+        tracks[i].center.y += static_cast<int>(std::round(tracks[i].velocity.y));
+        tracks[i].box = predict_box(tracks[i]);
+        tracks[i].velocity *= 0.85F;
         tracks[i].missed_frames += 1;
         tracks[i].state = TrackState::Lost;
     }
@@ -405,6 +502,7 @@ void CounterEngine::run(const CameraRuntimePtr& runtime) const {
 
             processed_frames += 1;
             std::vector<Detection> detections;
+            std::vector<CrossingEvent> crossing_events;
             if (processed_frames % static_cast<std::uint64_t>(std::max(runtime->config.frame_skip, 1)) == 0U) {
                 detections = backend_->infer(frame);
             }
@@ -419,7 +517,8 @@ void CounterEngine::run(const CameraRuntimePtr& runtime) const {
                         runtime->stats,
                         frame.cols,
                         frame.rows,
-                        next_track_id
+                        next_track_id,
+                        crossing_events
                     );
                 } else {
                     update_tracks(
@@ -429,7 +528,8 @@ void CounterEngine::run(const CameraRuntimePtr& runtime) const {
                         runtime->stats,
                         frame.cols,
                         frame.rows,
-                        next_track_id
+                        next_track_id,
+                        crossing_events
                     );
                 }
 
@@ -448,6 +548,7 @@ void CounterEngine::run(const CameraRuntimePtr& runtime) const {
                 }
 
                 draw_overlay(*runtime, frame);
+                save_crossing_screenshots(app_config_, *runtime, frame, crossing_events);
                 write_jpeg(*runtime, frame);
             }
 
