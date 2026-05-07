@@ -17,6 +17,13 @@ namespace comvisplus {
 
 namespace {
 
+struct LetterboxResult {
+    cv::Mat image;
+    float scale = 1.0F;
+    float pad_x = 0.0F;
+    float pad_y = 0.0F;
+};
+
 std::string resolve_model_path(const std::string& input_path) {
     namespace fs = std::filesystem;
 
@@ -75,6 +82,69 @@ void non_max_suppression(std::vector<Detection>& detections, float iou_threshold
     detections = std::move(kept);
 }
 
+LetterboxResult make_letterbox(const cv::Mat& frame, int target_w, int target_h) {
+    LetterboxResult result;
+    if (frame.empty() || target_w <= 0 || target_h <= 0) {
+        return result;
+    }
+
+    const float scale = std::min(
+        static_cast<float>(target_w) / static_cast<float>(frame.cols),
+        static_cast<float>(target_h) / static_cast<float>(frame.rows)
+    );
+    const int resized_w = std::max(1, static_cast<int>(std::round(frame.cols * scale)));
+    const int resized_h = std::max(1, static_cast<int>(std::round(frame.rows * scale)));
+
+    cv::Mat resized;
+    cv::resize(frame, resized, cv::Size(resized_w, resized_h));
+
+    const int pad_w = target_w - resized_w;
+    const int pad_h = target_h - resized_h;
+    const int left = pad_w / 2;
+    const int right = pad_w - left;
+    const int top = pad_h / 2;
+    const int bottom = pad_h - top;
+
+    cv::copyMakeBorder(
+        resized,
+        result.image,
+        top,
+        bottom,
+        left,
+        right,
+        cv::BORDER_CONSTANT,
+        cv::Scalar(114, 114, 114)
+    );
+    result.scale = scale;
+    result.pad_x = static_cast<float>(left);
+    result.pad_y = static_cast<float>(top);
+    return result;
+}
+
+Detection decode_detection(
+    float cx,
+    float cy,
+    float w,
+    float h,
+    float score,
+    int class_id,
+    const LetterboxResult& letterbox,
+    const cv::Mat& frame
+) {
+    Detection det;
+    det.x1 = ((cx - (w * 0.5F)) - letterbox.pad_x) / letterbox.scale;
+    det.y1 = ((cy - (h * 0.5F)) - letterbox.pad_y) / letterbox.scale;
+    det.x2 = ((cx + (w * 0.5F)) - letterbox.pad_x) / letterbox.scale;
+    det.y2 = ((cy + (h * 0.5F)) - letterbox.pad_y) / letterbox.scale;
+    det.x1 = std::clamp(det.x1, 0.0F, static_cast<float>(frame.cols - 1));
+    det.y1 = std::clamp(det.y1, 0.0F, static_cast<float>(frame.rows - 1));
+    det.x2 = std::clamp(det.x2, 0.0F, static_cast<float>(frame.cols - 1));
+    det.y2 = std::clamp(det.y2, 0.0F, static_cast<float>(frame.rows - 1));
+    det.confidence = score;
+    det.class_id = class_id;
+    return det;
+}
+
 }  // namespace
 
 #ifdef COMVISPLUS_HAVE_OPENVINO
@@ -123,11 +193,17 @@ std::vector<Detection> OpenVinoBackend::infer(const cv::Mat& frame) const {
 
     const std::size_t input_h = impl_->input_shape.at(2);
     const std::size_t input_w = impl_->input_shape.at(3);
-    cv::Mat resized;
-    cv::resize(frame, resized, cv::Size(static_cast<int>(input_w), static_cast<int>(input_h)));
+    constexpr float kConfidenceThreshold = 0.25F;
+    constexpr float kIouThreshold = 0.45F;
+    constexpr int kPersonClassId = 0;
+
+    const auto letterbox = make_letterbox(frame, static_cast<int>(input_w), static_cast<int>(input_h));
+    if (letterbox.image.empty() || letterbox.scale <= 0.0F) {
+        return detections;
+    }
 
     cv::Mat rgb;
-    cv::cvtColor(resized, rgb, cv::COLOR_BGR2RGB);
+    cv::cvtColor(letterbox.image, rgb, cv::COLOR_BGR2RGB);
     rgb.convertTo(rgb, CV_32F, 1.0 / 255.0);
 
     ov::Tensor input_tensor(ov::element::f32, impl_->input_shape);
@@ -151,15 +227,10 @@ std::vector<Detection> OpenVinoBackend::infer(const cv::Mat& frame) const {
     const ov::Shape output_shape = output_tensor.get_shape();
     const float* data = output_tensor.data<const float>();
 
-    const float x_scale = static_cast<float>(frame.cols) / static_cast<float>(input_w);
-    const float y_scale = static_cast<float>(frame.rows) / static_cast<float>(input_h);
-
-    if (output_shape.size() == 3 && output_shape[1] >= 6) {
-        const std::size_t channels_count = output_shape[1];
-        const std::size_t predictions = output_shape[2];
-        const bool yolo_transposed = channels_count >= 6;
-
-        if (yolo_transposed) {
+    if (output_shape.size() == 3) {
+        if (output_shape[1] >= 6) {
+            const std::size_t channels_count = output_shape[1];
+            const std::size_t predictions = output_shape[2];
             for (std::size_t i = 0; i < predictions; ++i) {
                 const float cx = data[i];
                 const float cy = data[predictions + i];
@@ -176,29 +247,43 @@ std::vector<Detection> OpenVinoBackend::infer(const cv::Mat& frame) const {
                     }
                 }
 
-                if (best_class != 0 || best_score < 0.35F) {
+                if (best_class != kPersonClassId || best_score < kConfidenceThreshold) {
                     continue;
                 }
+                detections.push_back(
+                    decode_detection(cx, cy, w, h, best_score, best_class, letterbox, frame)
+                );
+            }
+        } else if (output_shape[2] >= 6) {
+            const std::size_t predictions = output_shape[1];
+            const std::size_t values_per_prediction = output_shape[2];
+            for (std::size_t i = 0; i < predictions; ++i) {
+                const float* row = data + (i * values_per_prediction);
+                const float cx = row[0];
+                const float cy = row[1];
+                const float w = row[2];
+                const float h = row[3];
 
-                Detection det;
-                det.x1 = (cx - (w / 2.0F)) * x_scale;
-                det.y1 = (cy - (h / 2.0F)) * y_scale;
-                det.x2 = (cx + (w / 2.0F)) * x_scale;
-                det.y2 = (cy + (h / 2.0F)) * y_scale;
-                det.confidence = best_score;
-                det.class_id = best_class;
-                detections.push_back(det);
+                int best_class = -1;
+                float best_score = 0.0F;
+                for (std::size_t c = 4; c < values_per_prediction; ++c) {
+                    const float score = row[c];
+                    if (score > best_score) {
+                        best_score = score;
+                        best_class = static_cast<int>(c - 4);
+                    }
+                }
+
+                if (best_class != kPersonClassId || best_score < kConfidenceThreshold) {
+                    continue;
+                }
+                detections.push_back(
+                    decode_detection(cx, cy, w, h, best_score, best_class, letterbox, frame)
+                );
             }
         }
     }
-
-    for (auto& det : detections) {
-        det.x1 = std::clamp(det.x1, 0.0F, static_cast<float>(frame.cols - 1));
-        det.y1 = std::clamp(det.y1, 0.0F, static_cast<float>(frame.rows - 1));
-        det.x2 = std::clamp(det.x2, 0.0F, static_cast<float>(frame.cols - 1));
-        det.y2 = std::clamp(det.y2, 0.0F, static_cast<float>(frame.rows - 1));
-    }
-    non_max_suppression(detections, 0.45F);
+    non_max_suppression(detections, kIouThreshold);
 #else
     (void) frame;
 #endif
