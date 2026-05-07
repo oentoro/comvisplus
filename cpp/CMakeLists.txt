@@ -7,6 +7,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(COMVISPLUS_ENABLE_OPENVINO "Enable OpenVINO inference backend" ON)
 
+# Debian OpenCV packages use the modern libstdc++ string ABI. Make it explicit
+# so OpenVINO/setupvars or external flags do not accidentally flip it.
+add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=1)
+
 add_executable(comvisplus_native
     src/main.cpp
     src/app_config.cpp
