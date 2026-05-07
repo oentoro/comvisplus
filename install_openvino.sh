@@ -68,7 +68,9 @@ download_archive() {
 }
 
 archive_matches_target() {
-  tar -tf "${ARCHIVE_FILE}" 2>/dev/null | grep -Eq "^(\\./)?${ARCHIVE_NAME}/"
+  local first_entry
+  first_entry="$(tar -tf "${ARCHIVE_FILE}" 2>/dev/null | head -n 1 || true)"
+  [[ "${first_entry}" == "${ARCHIVE_NAME}/" || "${first_entry}" == "./${ARCHIVE_NAME}/" ]]
 }
 
 if [[ ! -f "${ARCHIVE_FILE}" ]]; then
