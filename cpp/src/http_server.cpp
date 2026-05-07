@@ -162,6 +162,30 @@ std::string guess_content_type(const std::string& path) {
     return "application/octet-stream";
 }
 
+std::string replace_underscores(const std::string& input) {
+    std::string output = input;
+    std::replace(output.begin(), output.end(), '_', ' ');
+    return output;
+}
+
+std::string format_capture_time(const std::string& ymd, const std::string& hms, const std::string& millis) {
+    if (ymd.size() != 8 || hms.size() != 6) {
+        return trim_copy(ymd + " " + hms + (millis.empty() ? "" : ("." + millis)));
+    }
+    std::ostringstream out;
+    out
+        << ymd.substr(0, 4) << '-'
+        << ymd.substr(4, 2) << '-'
+        << ymd.substr(6, 2) << ' '
+        << hms.substr(0, 2) << ':'
+        << hms.substr(2, 2) << ':'
+        << hms.substr(4, 2);
+    if (!millis.empty()) {
+        out << '.' << millis;
+    }
+    return out.str();
+}
+
 std::string root_page() {
     return R"HTML(<!DOCTYPE html>
 <html lang="en">
@@ -198,6 +222,7 @@ std::string root_page() {
     .shot img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:#000; }
     .shot-meta { padding:10px 12px; font-size:12px; color:#9ca3af; }
     .shot-meta strong { display:block; color:#e5e7eb; margin-bottom:4px; }
+    .shot-actions { padding:0 12px 12px; display:flex; justify-content:flex-end; }
   </style>
 </head>
 <body>
@@ -326,6 +351,17 @@ std::string root_page() {
         return;
       }
       showMessage('Garis diperbarui.');
+      load();
+    }
+
+    async function deleteShot(file) {
+      if (!confirm('Hapus screenshot ini?')) return;
+      const res = await fetch(`/screenshots/${encodeURIComponent(file)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        showMessage('Gagal menghapus screenshot.');
+        return;
+      }
+      showMessage('Screenshot dihapus.');
       load();
     }
 
@@ -480,6 +516,9 @@ std::string root_page() {
             <strong>${shot.camera}</strong>
             <div>${shot.time}</div>
             <div>${shot.direction}</div>
+          </div>
+          <div class="shot-actions">
+            <button class="danger" onclick="deleteShot('${shot.file}')">Hapus</button>
           </div>`;
         shots.appendChild(card);
       });
@@ -800,16 +839,18 @@ void HttpServer::handle_client(int client_fd) const {
             const auto second = first == std::string::npos ? std::string::npos : filename.find('_', first + 1);
             const auto third = second == std::string::npos ? std::string::npos : filename.find('_', second + 1);
             const auto fourth = third == std::string::npos ? std::string::npos : filename.find('_', third + 1);
+            const auto dot = filename.rfind('.');
 
             ShotItem item;
             item.file = filename;
-            item.camera = first == std::string::npos ? filename : filename.substr(0, first);
-            item.time = second == std::string::npos
+            item.camera = first == std::string::npos ? filename : replace_underscores(filename.substr(0, first));
+            const std::string ymd = (first == std::string::npos || second == std::string::npos) ? "" : filename.substr(first + 1, second - first - 1);
+            const std::string hms = (second == std::string::npos || third == std::string::npos) ? "" : filename.substr(second + 1, third - second - 1);
+            const std::string millis = (third == std::string::npos || fourth == std::string::npos) ? "" : filename.substr(third + 1, fourth - third - 1);
+            item.time = format_capture_time(ymd, hms, millis);
+            item.direction = (fourth == std::string::npos)
                 ? ""
-                : filename.substr(first + 1, second - first - 1) + " " + filename.substr(second + 1, third - second - 1);
-            item.direction = third == std::string::npos
-                ? ""
-                : filename.substr(third + 1, fourth == std::string::npos ? std::string::npos : fourth - third - 1);
+                : replace_underscores(filename.substr(fourth + 1, dot == std::string::npos ? std::string::npos : dot - fourth - 1));
             item.mtime = entry.last_write_time(ec);
             items.push_back(item);
         }
@@ -843,7 +884,7 @@ void HttpServer::handle_client(int client_fd) const {
     }
 
     if (path.rfind("/screenshots/", 0) == 0) {
-        if (method != "GET") {
+        if (method != "GET" && method != "DELETE") {
             const auto response = http_method_not_allowed();
             ::send(client_fd, response.data(), response.size(), 0);
             ::close(client_fd);
@@ -860,6 +901,20 @@ void HttpServer::handle_client(int client_fd) const {
 
         namespace fs = std::filesystem;
         const fs::path image_path = fs::path(app_config_.screenshots_dir) / filename;
+        if (method == "DELETE") {
+            std::error_code ec;
+            const bool removed = fs::remove(image_path, ec);
+            if (!removed || ec) {
+                const auto response = http_not_found();
+                ::send(client_fd, response.data(), response.size(), 0);
+            } else {
+                const auto response = http_json(200, "OK", "{\"ok\":true}");
+                ::send(client_fd, response.data(), response.size(), 0);
+            }
+            ::close(client_fd);
+            return;
+        }
+
         std::ifstream input(image_path, std::ios::binary);
         if (!input.good()) {
             const auto response = http_not_found();
@@ -994,6 +1049,7 @@ void HttpServer::print_routes() const {
     std::cout << "[routes] POST /line/{id}\n";
     std::cout << "[routes] GET /screenshots\n";
     std::cout << "[routes] GET /screenshots/{file}\n";
+    std::cout << "[routes] DELETE /screenshots/{file}\n";
     std::cout << "[routes] GET /feed/{id}\n";
     std::cout << "[routes] GET /stats/{id}\n";
 }
