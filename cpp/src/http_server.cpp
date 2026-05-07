@@ -202,6 +202,7 @@ std::string root_page() {
     .field input { background:#111827; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:9px 11px; font-size:14px; }
     button { background:#2563eb; color:#fff; border:none; border-radius:8px; padding:9px 12px; font-weight:700; cursor:pointer; font-size:13px; }
     button.danger { background:#dc2626; }
+    button.secondary { background:#374151; }
     .msg { margin:0 0 14px; font-size:13px; color:#fbbf24; min-height:18px; }
     #grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:14px; align-items:start; }
     .card { background:#1f2937; border:1px solid #374151; border-radius:12px; overflow:hidden; }
@@ -216,13 +217,39 @@ std::string root_page() {
     .stats { display:flex; gap:10px; padding:10px 12px; font-size:13px; color:#9ca3af; flex-wrap:wrap; }
     .pill { color:#fff; font-weight:700; }
     .actions { padding:0 12px 12px; display:flex; justify-content:flex-end; gap:8px; }
-    .gallery { margin-top:20px; }
-    .gallery-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+    /* Gallery */
+    .gallery { margin-top:24px; }
+    .gallery-header { display:flex; align-items:center; gap:12px; margin:0 0 12px; flex-wrap:wrap; }
+    .gallery-header h2 { font-size:18px; margin:0; color:#e5e7eb; }
+    .shot-count { font-size:13px; color:#6b7280; background:#1f2937; border:1px solid #374151; padding:3px 10px; border-radius:99px; }
+    .filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; background:#1f2937; border:1px solid #374151; padding:12px; border-radius:12px; align-items:center; }
+    .filter-bar select, .filter-bar input[type=date] { background:#111827; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:7px 10px; font-size:13px; min-width:120px; flex:1; }
+    .gallery-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
     .shot { background:#1f2937; border:1px solid #374151; border-radius:12px; overflow:hidden; }
-    .shot img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:#000; }
+    .shot img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; background:#000; cursor:zoom-in; transition:opacity 0.15s; }
+    .shot img:hover { opacity:0.82; }
     .shot-meta { padding:10px 12px; font-size:12px; color:#9ca3af; }
-    .shot-meta strong { display:block; color:#e5e7eb; margin-bottom:4px; }
+    .shot-meta strong { display:block; color:#e5e7eb; margin-bottom:4px; font-size:13px; }
     .shot-actions { padding:0 12px 12px; display:flex; justify-content:flex-end; }
+    .empty-state { padding:48px; text-align:center; color:#4b5563; font-size:14px; grid-column:1/-1; }
+    /* Pagination */
+    .pagination { display:flex; align-items:center; justify-content:center; gap:6px; margin-top:18px; flex-wrap:wrap; padding:4px; }
+    .page-btn { background:#1f2937; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:6px 14px; font-size:13px; cursor:pointer; font-weight:600; }
+    .page-btn:hover:not([disabled]) { background:#374151; }
+    .page-btn.active { background:#2563eb; border-color:#2563eb; color:#fff; }
+    .page-btn[disabled] { opacity:0.35; cursor:default; }
+    .page-info { font-size:13px; color:#6b7280; padding:0 6px; }
+    /* Lightbox */
+    .lightbox { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.94); z-index:1000; align-items:center; justify-content:center; flex-direction:column; gap:12px; }
+    .lightbox.open { display:flex; }
+    .lightbox-img { max-width:92vw; max-height:80vh; object-fit:contain; border-radius:8px; box-shadow:0 8px 48px rgba(0,0,0,0.7); }
+    .lightbox-close { position:absolute; top:14px; right:18px; background:rgba(255,255,255,0.12); border:none; color:#e5e7eb; font-size:24px; cursor:pointer; line-height:1; padding:6px 13px; border-radius:8px; }
+    .lightbox-close:hover { background:rgba(255,255,255,0.22); }
+    .lightbox-meta { color:#9ca3af; font-size:13px; text-align:center; max-width:80vw; }
+    .lightbox-nav { display:flex; gap:10px; align-items:center; }
+    .lightbox-nav button { background:rgba(255,255,255,0.12); border:none; color:#e5e7eb; font-size:22px; cursor:pointer; padding:8px 18px; border-radius:8px; line-height:1; }
+    .lightbox-nav button:hover:not([disabled]) { background:rgba(255,255,255,0.22); }
+    .lightbox-nav button[disabled] { opacity:0.28; cursor:default; }
   </style>
 </head>
 <body>
@@ -244,12 +271,46 @@ std::string root_page() {
   </div>
   <div class="msg" id="msg"></div>
   <div id="grid"></div>
+
   <div class="gallery">
-    <h2 style="font-size:18px;margin:20px 0 12px;color:#e5e7eb">Screenshot Crossing</h2>
+    <div class="gallery-header">
+      <h2>Screenshot Crossing</h2>
+      <span id="shot-count" class="shot-count">memuat...</span>
+    </div>
+    <div class="filter-bar">
+      <select id="filter-camera" onchange="applyFilter()">
+        <option value="">Semua Kamera</option>
+      </select>
+      <select id="filter-direction" onchange="applyFilter()">
+        <option value="">Semua Arah</option>
+        <option value="right">Right</option>
+        <option value="left">Left</option>
+      </select>
+      <input type="date" id="filter-date" onchange="applyFilter()">
+      <button class="secondary" onclick="clearFilters()">Reset</button>
+      <button class="danger" onclick="deleteAllFiltered()">Hapus Semua</button>
+    </div>
     <div id="shots" class="gallery-grid"></div>
+    <div id="pagination" class="pagination"></div>
   </div>
+
+  <div class="lightbox" id="lightbox">
+    <button class="lightbox-close" onclick="closeLightbox()">&#x2715;</button>
+    <img class="lightbox-img" id="lightbox-img" src="" alt="">
+    <div class="lightbox-meta" id="lightbox-meta"></div>
+    <div class="lightbox-nav">
+      <button id="lb-prev" onclick="lbNavigate(-1)">&#8592;</button>
+      <button id="lb-next" onclick="lbNavigate(1)">&#8594;</button>
+    </div>
+  </div>
+
   <script>
     let cameraState = [];
+    let allScreenshots = [];
+    let currentPage = 1;
+    let lbIndex = 0;
+    let lbShots = [];
+    const PAGE_SIZE = 24;
     const dragState = { id: null, mode: null, start: null };
 
     function showMessage(text) {
@@ -264,38 +325,23 @@ std::string root_page() {
       const label = document.getElementById('label').value.trim();
       const url = document.getElementById('url').value.trim();
       const frameSkip = document.getElementById('skip').value.trim() || '2';
-      if (!url) {
-        showMessage('RTSP URL wajib diisi.');
-        return;
-      }
-
+      if (!url) { showMessage('RTSP URL wajib diisi.'); return; }
       const body = new URLSearchParams({ label, url, frame_skip: frameSkip });
-      const res = await fetch('/cameras', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body
-      });
+      const res = await fetch('/cameras', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
       const text = await res.text();
-      if (!res.ok) {
-        showMessage(text);
-        return;
-      }
-
+      if (!res.ok) { showMessage(text); return; }
       document.getElementById('label').value = '';
       document.getElementById('url').value = '';
       showMessage('Kamera ditambahkan.');
-      load();
+      loadCameras();
     }
 
     async function removeCamera(id) {
       if (!confirm('Hapus kamera ini?')) return;
       const res = await fetch(`/cameras/${id}`, { method: 'DELETE' });
-      if (!res.ok) {
-        showMessage('Gagal menghapus kamera.');
-        return;
-      }
+      if (!res.ok) { showMessage('Gagal menghapus kamera.'); return; }
       showMessage('Kamera dihapus.');
-      load();
+      loadCameras();
     }
 
     async function editCamera(id) {
@@ -307,108 +353,59 @@ std::string root_page() {
       if (url === null || !url.trim()) return;
       const frameSkip = prompt('Frame skip', String(cam.frame_skip ?? 2));
       if (frameSkip === null) return;
-
       const body = new URLSearchParams({
-        label: label.trim(),
-        url: url.trim(),
-        frame_skip: frameSkip.trim() || '2',
-        x1: String(cam.x1 ?? 0.5),
-        y1: String(cam.y1 ?? 0.0),
-        x2: String(cam.x2 ?? 0.5),
-        y2: String(cam.y2 ?? 1.0),
+        label: label.trim(), url: url.trim(), frame_skip: frameSkip.trim() || '2',
+        x1: String(cam.x1 ?? 0.5), y1: String(cam.y1 ?? 0.0),
+        x2: String(cam.x2 ?? 0.5), y2: String(cam.y2 ?? 1.0),
       });
-      const res = await fetch(`/cameras/${id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body
-      });
+      const res = await fetch(`/cameras/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
       const text = await res.text();
-      if (!res.ok) {
-        showMessage(text);
-        return;
-      }
+      if (!res.ok) { showMessage(text); return; }
       showMessage('Kamera diperbarui.');
-      load();
+      loadCameras();
     }
 
     async function saveLine(id) {
       const cam = getCamera(id);
       if (!cam) return;
       const body = new URLSearchParams({
-        x1: String(cam.x1 ?? 0.5),
-        y1: String(cam.y1 ?? 0.0),
-        x2: String(cam.x2 ?? 0.5),
-        y2: String(cam.y2 ?? 1.0),
+        x1: String(cam.x1 ?? 0.5), y1: String(cam.y1 ?? 0.0),
+        x2: String(cam.x2 ?? 0.5), y2: String(cam.y2 ?? 1.0),
       });
-      const res = await fetch(`/line/${id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body
-      });
+      const res = await fetch(`/line/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
       const text = await res.text();
-      if (!res.ok) {
-        showMessage(text);
-        return;
-      }
+      if (!res.ok) { showMessage(text); return; }
       showMessage('Garis diperbarui.');
-      load();
+      loadCameras();
     }
 
-    async function deleteShot(file) {
-      if (!confirm('Hapus screenshot ini?')) return;
-      const res = await fetch(`/screenshots/${encodeURIComponent(file)}`, { method: 'DELETE' });
-      if (!res.ok) {
-        showMessage('Gagal menghapus screenshot.');
-        return;
-      }
-      showMessage('Screenshot dihapus.');
-      load();
-    }
-
-    function clamp01(value) {
-      return Math.max(0, Math.min(1, value));
-    }
+    function clamp01(value) { return Math.max(0, Math.min(1, value)); }
 
     function getOverlayPoint(event, svg) {
       const rect = svg.getBoundingClientRect();
-      return {
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-        w: rect.width,
-        h: rect.height,
-      };
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top, w: rect.width, h: rect.height };
     }
 
     function updateOverlay(id) {
       const cam = getCamera(id);
       const svg = document.getElementById(`overlay-${id}`);
       if (!cam || !svg) return;
-
-      const x1 = cam.x1 * 100;
-      const y1 = cam.y1 * 100;
-      const x2 = cam.x2 * 100;
-      const y2 = cam.y2 * 100;
-
+      const x1 = cam.x1 * 100, y1 = cam.y1 * 100, x2 = cam.x2 * 100, y2 = cam.y2 * 100;
       const hit = document.getElementById(`line-hit-${id}`);
       const line = document.getElementById(`line-main-${id}`);
       const p1 = document.getElementById(`handle-1-${id}`);
       const p2 = document.getElementById(`handle-2-${id}`);
-
       [hit, line].forEach(el => {
         if (!el) return;
-        el.setAttribute('x1', x1);
-        el.setAttribute('y1', y1);
-        el.setAttribute('x2', x2);
-        el.setAttribute('y2', y2);
+        el.setAttribute('x1', x1); el.setAttribute('y1', y1);
+        el.setAttribute('x2', x2); el.setAttribute('y2', y2);
       });
       if (p1) {
-        p1.setAttribute('cx', x1);
-        p1.setAttribute('cy', y1);
+        p1.setAttribute('cx', x1); p1.setAttribute('cy', y1);
         p1.classList.toggle('dragging', dragState.id === id && dragState.mode === 'p1');
       }
       if (p2) {
-        p2.setAttribute('cx', x2);
-        p2.setAttribute('cy', y2);
+        p2.setAttribute('cx', x2); p2.setAttribute('cy', y2);
         p2.classList.toggle('dragging', dragState.id === id && dragState.mode === 'p2');
       }
     }
@@ -418,12 +415,8 @@ std::string root_page() {
       const svg = document.getElementById(`overlay-${id}`);
       if (!cam || !svg) return;
       const p = getOverlayPoint(event, svg);
-      dragState.id = id;
-      dragState.mode = mode;
-      dragState.start = {
-        x: p.x, y: p.y, w: p.w, h: p.h,
-        x1: cam.x1, y1: cam.y1, x2: cam.x2, y2: cam.y2,
-      };
+      dragState.id = id; dragState.mode = mode;
+      dragState.start = { x: p.x, y: p.y, w: p.w, h: p.h, x1: cam.x1, y1: cam.y1, x2: cam.x2, y2: cam.y2 };
       event.preventDefault();
       updateOverlay(id);
     }
@@ -433,22 +426,16 @@ std::string root_page() {
       const cam = getCamera(dragState.id);
       const svg = document.getElementById(`overlay-${dragState.id}`);
       if (!cam || !svg) return;
-
       const p = getOverlayPoint(event, svg);
       const start = dragState.start;
       if (dragState.mode === 'p1') {
-        cam.x1 = clamp01(p.x / p.w);
-        cam.y1 = clamp01(p.y / p.h);
+        cam.x1 = clamp01(p.x / p.w); cam.y1 = clamp01(p.y / p.h);
       } else if (dragState.mode === 'p2') {
-        cam.x2 = clamp01(p.x / p.w);
-        cam.y2 = clamp01(p.y / p.h);
+        cam.x2 = clamp01(p.x / p.w); cam.y2 = clamp01(p.y / p.h);
       } else if (dragState.mode === 'line') {
-        const dx = (p.x - start.x) / p.w;
-        const dy = (p.y - start.y) / p.h;
-        cam.x1 = clamp01(start.x1 + dx);
-        cam.y1 = clamp01(start.y1 + dy);
-        cam.x2 = clamp01(start.x2 + dx);
-        cam.y2 = clamp01(start.y2 + dy);
+        const dx = (p.x - start.x) / p.w, dy = (p.y - start.y) / p.h;
+        cam.x1 = clamp01(start.x1 + dx); cam.y1 = clamp01(start.y1 + dy);
+        cam.x2 = clamp01(start.x2 + dx); cam.y2 = clamp01(start.y2 + dy);
       }
       updateOverlay(dragState.id);
     });
@@ -456,16 +443,201 @@ std::string root_page() {
     document.addEventListener('mouseup', async () => {
       if (!dragState.id) return;
       const id = dragState.id;
-      dragState.id = null;
-      dragState.mode = null;
-      dragState.start = null;
+      dragState.id = null; dragState.mode = null; dragState.start = null;
       updateOverlay(id);
       await saveLine(id);
     });
 
-    async function load() {
+    // ---- Gallery ----
+    function getFilters() {
+      return {
+        camera: document.getElementById('filter-camera').value,
+        direction: document.getElementById('filter-direction').value,
+        date: document.getElementById('filter-date').value.replace(/-/g, ''),
+      };
+    }
+
+    function filteredShots() {
+      const f = getFilters();
+      return allScreenshots.filter(s => {
+        if (f.camera && s.camera !== f.camera) return false;
+        if (f.direction && !s.direction.toLowerCase().includes(f.direction)) return false;
+        if (f.date && !s.file.includes(f.date)) return false;
+        return true;
+      });
+    }
+
+    function applyFilter() { currentPage = 1; renderGallery(); }
+
+    function clearFilters() {
+      document.getElementById('filter-camera').value = '';
+      document.getElementById('filter-direction').value = '';
+      document.getElementById('filter-date').value = '';
+      applyFilter();
+    }
+
+    async function deleteShot(file) {
+      if (!confirm('Hapus screenshot ini?')) return;
+      const res = await fetch(`/screenshots/${encodeURIComponent(file)}`, { method: 'DELETE' });
+      if (!res.ok) { showMessage('Gagal menghapus screenshot.'); return; }
+      showMessage('Screenshot dihapus.');
+      await loadScreenshots();
+    }
+
+    async function deleteAllFiltered() {
+      const shots = filteredShots();
+      if (!shots.length) { showMessage('Tidak ada screenshot untuk dihapus.'); return; }
+      if (!confirm(`Hapus ${shots.length} screenshot?`)) return;
+      let count = 0;
+      for (const s of shots) {
+        const res = await fetch(`/screenshots/${encodeURIComponent(s.file)}`, { method: 'DELETE' });
+        if (res.ok) count++;
+      }
+      showMessage(`${count} screenshot dihapus.`);
+      await loadScreenshots();
+    }
+
+    // ---- Lightbox ----
+    function openLightbox(shots, index) {
+      lbShots = shots;
+      lbIndex = index;
+      showLbImage();
+      document.getElementById('lightbox').classList.add('open');
+    }
+
+    function showLbImage() {
+      const shot = lbShots[lbIndex];
+      document.getElementById('lightbox-img').src = shot.url;
+      document.getElementById('lightbox-meta').textContent =
+        shot.camera + '  ·  ' + shot.time + '  ·  ' + shot.direction + '  ·  ' + (lbIndex + 1) + ' / ' + lbShots.length;
+      document.getElementById('lb-prev').disabled = lbIndex === 0;
+      document.getElementById('lb-next').disabled = lbIndex === lbShots.length - 1;
+    }
+
+    function lbNavigate(dir) {
+      const next = lbIndex + dir;
+      if (next < 0 || next >= lbShots.length) return;
+      lbIndex = next;
+      showLbImage();
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightbox').classList.remove('open');
+      document.getElementById('lightbox-img').src = '';
+    }
+
+    document.getElementById('lightbox').addEventListener('click', function(e) {
+      if (e.target === this) closeLightbox();
+    });
+
+    document.addEventListener('keydown', function(e) {
+      if (!document.getElementById('lightbox').classList.contains('open')) return;
+      if (e.key === 'Escape') closeLightbox();
+      if (e.key === 'ArrowLeft') lbNavigate(-1);
+      if (e.key === 'ArrowRight') lbNavigate(1);
+    });
+
+    // ---- Render Gallery ----
+    function updateCameraFilter(shots) {
+      const sel = document.getElementById('filter-camera');
+      const current = sel.value;
+      const cameras = [...new Set(shots.map(s => s.camera))].sort();
+      sel.innerHTML = '<option value="">Semua Kamera</option>' +
+        cameras.map(c => '<option value="' + c + '"' + (c === current ? ' selected' : '') + '>' + c + '</option>').join('');
+    }
+
+    function renderGallery() {
+      const filtered = filteredShots();
+      const total = filtered.length;
+      const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      if (currentPage > totalPages) currentPage = totalPages;
+      const start = (currentPage - 1) * PAGE_SIZE;
+      const pageShots = filtered.slice(start, start + PAGE_SIZE);
+
+      const countEl = document.getElementById('shot-count');
+      countEl.textContent = total === allScreenshots.length
+        ? total + ' foto'
+        : total + ' dari ' + allScreenshots.length + ' foto';
+
+      const container = document.getElementById('shots');
+      container.innerHTML = '';
+      if (pageShots.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = allScreenshots.length === 0 ? 'Belum ada screenshot' : 'Tidak ada foto yang cocok dengan filter';
+        container.appendChild(empty);
+      } else {
+        pageShots.forEach(function(shot, i) {
+          const card = document.createElement('div');
+          card.className = 'shot';
+
+          const img = document.createElement('img');
+          img.src = shot.url;
+          img.alt = shot.file;
+          img.loading = 'lazy';
+          img.addEventListener('click', function() { openLightbox(pageShots, i); });
+
+          const meta = document.createElement('div');
+          meta.className = 'shot-meta';
+          const strong = document.createElement('strong');
+          strong.textContent = shot.camera;
+          const d1 = document.createElement('div');
+          d1.textContent = shot.time;
+          const d2 = document.createElement('div');
+          d2.textContent = shot.direction;
+          meta.appendChild(strong);
+          meta.appendChild(d1);
+          meta.appendChild(d2);
+
+          const actions = document.createElement('div');
+          actions.className = 'shot-actions';
+          const delBtn = document.createElement('button');
+          delBtn.className = 'danger';
+          delBtn.textContent = 'Hapus';
+          delBtn.addEventListener('click', function() { deleteShot(shot.file); });
+          actions.appendChild(delBtn);
+
+          card.appendChild(img);
+          card.appendChild(meta);
+          card.appendChild(actions);
+          container.appendChild(card);
+        });
+      }
+      renderPagination(total, totalPages);
+    }
+
+    function renderPagination(total, totalPages) {
+      const pag = document.getElementById('pagination');
+      if (totalPages <= 1) { pag.innerHTML = ''; return; }
+      const delta = 2;
+      const pageNums = [];
+      for (let i = 1; i <= totalPages; i++) {
+        if (i === 1 || i === totalPages || (i >= currentPage - delta && i <= currentPage + delta)) pageNums.push(i);
+      }
+      let html = '<button class="page-btn" onclick="goPage(' + (currentPage - 1) + ')"' + (currentPage === 1 ? ' disabled' : '') + '>&lsaquo; Prev</button>';
+      let prev = 0;
+      for (let j = 0; j < pageNums.length; j++) {
+        const p = pageNums[j];
+        if (prev && p - prev > 1) html += '<span class="page-info">&hellip;</span>';
+        html += '<button class="page-btn' + (p === currentPage ? ' active' : '') + '" onclick="goPage(' + p + ')">' + p + '</button>';
+        prev = p;
+      }
+      html += '<button class="page-btn" onclick="goPage(' + (currentPage + 1) + ')"' + (currentPage === totalPages ? ' disabled' : '') + '>Next &rsaquo;</button>';
+      html += '<span class="page-info">Hal. ' + currentPage + ' / ' + totalPages + '</span>';
+      pag.innerHTML = html;
+    }
+
+    function goPage(p) {
+      const filtered = filteredShots();
+      const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+      currentPage = Math.max(1, Math.min(p, totalPages));
+      renderGallery();
+      document.querySelector('.gallery').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    // ---- Load ----
+    async function loadCameras() {
       const cameras = await fetch('/cameras').then(r => r.json()).catch(() => []);
-      const screenshots = await fetch('/screenshots').then(r => r.json()).catch(() => []);
       cameraState = cameras;
       const grid = document.getElementById('grid');
       grid.innerHTML = '';
@@ -504,27 +676,19 @@ std::string root_page() {
         grid.appendChild(card);
         requestAnimationFrame(() => updateOverlay(cam.id));
       });
-
-      const shots = document.getElementById('shots');
-      shots.innerHTML = '';
-      screenshots.forEach(shot => {
-        const card = document.createElement('div');
-        card.className = 'shot';
-        card.innerHTML = `
-          <img src="${shot.url}" alt="${shot.file}">
-          <div class="shot-meta">
-            <strong>${shot.camera}</strong>
-            <div>${shot.time}</div>
-            <div>${shot.direction}</div>
-          </div>
-          <div class="shot-actions">
-            <button class="danger" onclick="deleteShot('${shot.file}')">Hapus</button>
-          </div>`;
-        shots.appendChild(card);
-      });
     }
-    load();
-    setInterval(load, 2000);
+
+    async function loadScreenshots() {
+      const screenshots = await fetch('/screenshots').then(r => r.json()).catch(() => []);
+      allScreenshots = screenshots;
+      updateCameraFilter(screenshots);
+      renderGallery();
+    }
+
+    loadCameras();
+    loadScreenshots();
+    setInterval(loadCameras, 2000);
+    setInterval(loadScreenshots, 10000);
   </script>
 </body>
 </html>)HTML";
