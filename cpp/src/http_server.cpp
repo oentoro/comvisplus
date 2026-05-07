@@ -151,28 +151,28 @@ std::string root_page() {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Comvisplus Native</title>
   <style>
-    body { background:#111827; color:#e5e7eb; font-family:system-ui,sans-serif; margin:0; padding:24px; }
-    h1 { margin:0 0 20px; color:#38bdf8; }
-    .toolbar { display:flex; gap:12px; flex-wrap:wrap; align-items:end; margin-bottom:20px; background:#1f2937; border:1px solid #374151; padding:16px; border-radius:12px; }
-    .field { display:flex; flex-direction:column; gap:6px; min-width:220px; flex:1; }
+    body { background:#111827; color:#e5e7eb; font-family:system-ui,sans-serif; margin:0; padding:18px; }
+    h1 { margin:0 0 16px; color:#38bdf8; font-size:28px; }
+    .toolbar { display:flex; gap:10px; flex-wrap:wrap; align-items:end; margin-bottom:16px; background:#1f2937; border:1px solid #374151; padding:14px; border-radius:12px; }
+    .field { display:flex; flex-direction:column; gap:6px; min-width:180px; flex:1; }
     .field label { font-size:12px; color:#9ca3af; }
-    .field input { background:#111827; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:10px 12px; }
-    button { background:#2563eb; color:#fff; border:none; border-radius:8px; padding:10px 14px; font-weight:700; cursor:pointer; }
+    .field input { background:#111827; color:#e5e7eb; border:1px solid #374151; border-radius:8px; padding:9px 11px; font-size:14px; }
+    button { background:#2563eb; color:#fff; border:none; border-radius:8px; padding:9px 12px; font-weight:700; cursor:pointer; font-size:13px; }
     button.danger { background:#dc2626; }
-    .msg { margin:0 0 16px; font-size:14px; color:#fbbf24; min-height:20px; }
-    #grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(460px,1fr)); gap:16px; }
+    .msg { margin:0 0 14px; font-size:13px; color:#fbbf24; min-height:18px; }
+    #grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:14px; align-items:start; }
     .card { background:#1f2937; border:1px solid #374151; border-radius:12px; overflow:hidden; }
-    .head { padding:12px 14px; border-bottom:1px solid #374151; display:flex; justify-content:space-between; gap:12px; }
+    .head { padding:10px 12px; border-bottom:1px solid #374151; display:flex; justify-content:space-between; gap:10px; }
     .video-wrap { position:relative; background:#000; }
-    .feed { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; display:block; }
+    .feed { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; display:block; max-height:260px; }
     .overlay { position:absolute; inset:0; width:100%; height:100%; }
     .overlay .line-hit { stroke:transparent; stroke-width:18; cursor:move; }
     .overlay .line-main { stroke:rgba(255,255,80,0.85); stroke-width:2.5; stroke-linecap:round; }
     .overlay .handle { fill:rgba(255,230,50,0.95); stroke:rgba(0,0,0,0.4); stroke-width:1; cursor:grab; }
     .overlay .handle.dragging { fill:#fff; cursor:grabbing; }
-    .stats { display:flex; gap:12px; padding:12px 14px; font-size:14px; color:#9ca3af; }
+    .stats { display:flex; gap:10px; padding:10px 12px; font-size:13px; color:#9ca3af; flex-wrap:wrap; }
     .pill { color:#fff; font-weight:700; }
-    .actions { padding:0 14px 14px; display:flex; justify-content:flex-end; gap:8px; }
+    .actions { padding:0 12px 12px; display:flex; justify-content:flex-end; gap:8px; }
   </style>
 </head>
 <body>

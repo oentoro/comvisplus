@@ -91,7 +91,6 @@ void draw_overlay(CameraRuntime& runtime, cv::Mat& frame) {
     cv::circle(frame, p1, 5, cv::Scalar(0, 255, 255), -1, cv::LINE_AA);
     cv::circle(frame, p2, 5, cv::Scalar(0, 255, 255), -1, cv::LINE_AA);
 
-    cv::rectangle(frame, cv::Rect(12, 12, 310, 110), cv::Scalar(0, 0, 0), -1);
     cv::putText(
         frame,
         "Total: " + std::to_string(runtime.stats.total),
